@@ -4,8 +4,12 @@
 ##### The program will support uncompressed audio, like .wav and .flac files, as well as other formats, like mp3, aac, and ogg.
 ##### The application will render different audio visualizers for the current song and will try to incorporate lyrics into the visualizer.
 
+## Year two Concepts (currently)
+1: Packages
+2: GUI
+
 ### Compile instructions (Executables will be provided at a later date):
-#### 1: make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
+#### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
 #### 2: Download source code and navigate to [MLAV/] folder in a terminal.
 #### 3: run "cargo run" in the terminal. Rust, using Cargo, should handle compilation and running.
 
