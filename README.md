@@ -6,7 +6,9 @@
 
 ## Year two Concepts (currently)
 1. Packages
-2. GUI
+-   Rust has Modules, which are much more versatile versions of classes and hierarchy
+3. GUI
+-   A running window, currently no interactability, only display.
 
 ### Compile instructions (Executables will be provided at a later date):
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
