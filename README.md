@@ -5,7 +5,7 @@
 ##### The application will render different audio visualizers for the current song and will try to incorporate lyrics into the visualizer.
 
 ### Run intructions:
-#### 1: make sure you have Rust installed.
+#### 1: make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
 #### 2: Download source code and navigate to [MLAV/] folder in a terminal.
 #### 3: run "cargo run" in the terminal. Rust, using Cargo, should handle compilation and running.
 
