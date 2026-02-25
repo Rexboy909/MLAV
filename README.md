@@ -24,6 +24,6 @@
 [Source](assets/Images/assignment_files)
 ###### very barebones
 
-##### (very) Rough UML Diagram
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/mockups-01.png?raw=true)
+##### Rough UML Diagram
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/UML.png?raw=true)
 [Source](assets/Images/assignment_files)
