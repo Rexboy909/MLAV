@@ -12,6 +12,8 @@
 
 ### Compile instructions (Executables will be provided at a later date):
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
+- Go to the site
+- run Install script (if on unix os or MacOS) or run installer (if on windows)
 #### 2: Download source code and navigate to [MLAV/] folder in a terminal.
 #### 3: run "cargo run" in the terminal. Rust, using Cargo, should handle compilation and running.
 
