@@ -4,7 +4,7 @@ use macroquad::prelude::*;
 #[macroquad::main(window_conf)]
 async fn main() {
     loop {
-        ui::draw_main_ui();
+        ui::draw_main_ui().await;
         next_frame().await;
     }
 }
