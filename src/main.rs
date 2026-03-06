@@ -1,9 +1,12 @@
 mod ui;
+mod player;
+
 use macroquad::prelude::*;
 
 #[macroquad::main(window_conf)]
 async fn main() {
-
+    player::init();
+    player::load_output();
     ui::load_assets().await;
 
     loop {

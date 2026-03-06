@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use once_cell::sync::OnceCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use crate::player;
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
 
 //--other statics--//
@@ -23,7 +24,7 @@ pub async fn draw_main_ui() {
     // for some reason, there is already a 30px margin?, so add another 30.0
     draw_rectangle(30.0, 30.0, 120.0, h - 180.0, SIDEBAR_BG_COLOR);
     draw_rectangle(30.0, h - 120.0, w - 60.0, 90.0, SIDEBAR_BG_COLOR);
-    draw_play_pause_button();
+    draw_play_pause_button(w,h);
     draw_visualizer(w,h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
@@ -52,10 +53,15 @@ fn draw_button_rect(x: f32, y: f32, w: f32, h: f32, label: &str, ch: Color, c: C
     clicked
 }
 
-fn draw_play_pause_button() -> bool {
+fn draw_play_pause_button(w: f32, h: f32) -> bool {
     let label = if IS_PLAYING.load(Ordering::Relaxed) { "||" } else { " >" };
-    if draw_button_rect(30.0, 90.0, 40.0, 40.0, label, LIGHTGRAY, SIDEBAR_BG_COLOR, BLACK, BLACK, BLACK) {
+    if draw_button_rect((w/2.0)-20.0, h - 90.0, 40.0, 40.0, label, LIGHTGRAY, SIDEBAR_BG_COLOR, BLACK, BLACK, BLACK) {
         IS_PLAYING.store(!IS_PLAYING.load(Ordering::Relaxed), Ordering::Relaxed);
+        if IS_PLAYING.load(Ordering::Relaxed) {
+            player::start_playback();
+        } else {
+            player::stop_playback();
+        }
     }
 
     IS_PLAYING.load(Ordering::Relaxed)
