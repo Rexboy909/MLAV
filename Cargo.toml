@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cpal = "0.17.3"
 macroquad = "0.4.14"
 once_cell = "1.18"
 rodio = "0.22.2"
+
 [build-dependencies]
 winres = "0.1"

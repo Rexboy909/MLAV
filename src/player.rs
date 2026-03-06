@@ -1,62 +1,114 @@
 use std::fs::File;
 use std::io::BufReader;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+use std::thread;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
+use cpal::traits::{DeviceTrait, HostTrait};
 
 struct AudioState {
     player: Player,
     _sink: MixerDeviceSink,
 }
 
-static AUDIO: OnceLock<Mutex<AudioState>> = OnceLock::new();
+static AUDIO: OnceLock<Mutex<Option<AudioState>>> = OnceLock::new();
+
+fn get_state() -> &'static Mutex<Option<AudioState>> {
+    AUDIO.get_or_init(|| Mutex::new(None))
+}
 
 pub fn init() {
-    let sink = DeviceSinkBuilder::open_default_sink()
-        .expect("Failed to open default audio stream");
+    reinit_audio();
+    watch_device_changes();
+}
+
+fn reinit_audio() {
+    let sink = DeviceSinkBuilder::from_default_device()
+        .expect("Failed to get default device")
+        .with_error_callback(|err| {
+            eprintln!("Audio stream error: {err}, attempting reinit...");
+            reinit_audio();
+        })
+        .open_stream()
+        .expect("Failed to open audio stream");
 
     let player = Player::connect_new(&sink.mixer());
 
-    AUDIO.set(Mutex::new(AudioState {
+    let mut state = get_state().lock().unwrap();
+    *state = Some(AudioState {
         player,
         _sink: sink,
-    })).ok();
+    });
+}
+
+fn watch_device_changes() {
+    thread::spawn(|| {
+        let mut last_device = default_device_name();
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            let current = default_device_name();
+            if current != last_device {
+                eprintln!("Default audio device changed: {:?} -> {:?}", last_device, current);
+                last_device = current;
+                reinit_audio();
+            }
+        }
+    });
+}
+
+fn default_device_name() -> Option<String> {
+    cpal::default_host()
+        .default_output_device()
+        .and_then(|d| d.name().ok())
 }
 
 pub fn load_output() {
-    let file = BufReader::new(File::open("songs/example.mp3").unwrap());
-    let source = Decoder::new(file).unwrap();
-
-    let audio = AUDIO.get().unwrap().lock().unwrap();
-    audio.player.append(source);
-    audio.player.pause();
+    let path = "examples/music.ogg";
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
+    };
+    let source = match Decoder::new(BufReader::new(file)) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
+    };
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.append(source);
+        state.player.pause();
+    }
 }
 
 pub fn start_playback() {
-    AUDIO.get().unwrap().lock().unwrap().player.play();
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.play();
+    }
 }
 
 pub fn stop_playback() {
-    AUDIO.get().unwrap().lock().unwrap().player.pause();
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.pause();
+    }
 }
 
 pub fn toggle_playback() {
-    let audio = AUDIO.get().unwrap().lock().unwrap();
-    if audio.player.is_paused() {
-        audio.player.play();
-    } else {
-        audio.player.pause();
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        if state.player.is_paused() {
+            state.player.play();
+        } else {
+            state.player.pause();
+        }
     }
 }
 
 pub fn rewind_playback() {
-    let audio = AUDIO.get().unwrap().lock().unwrap();
-    audio.player.try_seek(Duration::ZERO).ok();
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.try_seek(Duration::ZERO).ok();
+    }
 }
 
 pub fn fast_forward_playback() {
-    let audio = AUDIO.get().unwrap().lock().unwrap();
-    let current = audio.player.get_pos();
-    audio.player.try_seek(current + Duration::from_secs(10)).ok();
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        let pos = state.player.get_pos();
+        state.player.try_seek(pos + Duration::from_secs(10)).ok();
+    }
 }

@@ -10,6 +10,7 @@ async fn main() {
     ui::load_assets().await;
 
     loop {
+        player::init(); // for testing, will remove later
         ui::draw_main_ui().await;
         next_frame().await;
     }
