@@ -7,8 +7,11 @@
 ## Year two Concepts (currently)
 1. Packages
 -   Rust has Modules, which are much more versatile versions of classes and hierarchy
-3. GUI
+2. GUI
 -   A running window, currently no interactability, only display.
+3. File I/O
+4. Exception handling
+-  The goal is that if, for some reason, something doesnt work or loads incorrectly, the program and adapt and not crash.
 
 ### Compile instructions (Executables will be provided at a later date):
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
