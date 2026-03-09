@@ -23,7 +23,7 @@ pub fn init() {
 }
 
 fn reinit_audio() {
-    let sink = DeviceSinkBuilder::from_default_device()
+    let mut sink = DeviceSinkBuilder::from_default_device()
         .expect("Failed to get default device")
         .with_error_callback(|err| {
             eprintln!("Audio stream error: {err}, attempting reinit...");
@@ -31,6 +31,8 @@ fn reinit_audio() {
         })
         .open_stream()
         .expect("Failed to open audio stream");
+
+    sink.log_on_drop(false); // suppress the drop message
 
     let player = Player::connect_new(&sink.mixer());
 
@@ -63,7 +65,7 @@ fn default_device_name() -> Option<String> {
 }
 
 pub fn load_output() {
-    let path = "examples/music.ogg";
+    let path = "songs/example.mp3";
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
