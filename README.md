@@ -11,9 +11,9 @@
 -   A running window, currently no interactability, only display.
 3. File I/O
 4. Exception handling
--  The goal is that if, for some reason, something doesnt work or loads incorrectly, the program and adapt and not crash.
+-  The goal is that if, for some reason, something doesnt work or loads incorrectly, the program can adapt and not crash.
 
-### Compile instructions (Executables will be provided at a later date):
+## Compile instructions (Executables will be provided at a later date):
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
 - Go to the site
 - run Install script (if on unix os or MacOS) or run installer (if on windows)
