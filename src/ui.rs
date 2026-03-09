@@ -13,7 +13,7 @@ const BG_COLOR: Color = Color::new(53.0/255.0, 16.0/255.0, 108.0/255.0, 1.0);
 const SIDEBAR_BG_COLOR: Color = Color::new(100.0/255.0, 100.0/255.0, 100.0/255.0, 1.0);
 
 //--main ui drawing function--//
-pub async fn draw_main_ui() {
+pub fn draw_main_ui() {
 
     let w = screen_width().max(1110.0);
     let h = screen_height().max(683.0);

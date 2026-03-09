@@ -10,8 +10,7 @@ async fn main() {
     ui::load_assets().await;
 
     loop {
-        player::init(); // for testing, will remove later
-        ui::draw_main_ui().await;
+        ui::draw_main_ui();
         next_frame().await;
     }
 }
@@ -22,10 +21,6 @@ fn window_conf() -> Conf {
         window_width: 1280,
         window_height: 720,
         window_resizable: true,
-        platform: miniquad::conf::Platform {
-            swap_interval: Some(0),
-            ..Default::default()
-        },
         ..Default::default()
     }
 }
