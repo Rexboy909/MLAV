@@ -1,10 +1,14 @@
 mod ui;
 mod player;
+mod library;
+mod song;
 
 use macroquad::prelude::*;
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    library::init("songs/");
+    library::watch("songs/");
     player::init();
     player::load_output();
     ui::load_assets().await;

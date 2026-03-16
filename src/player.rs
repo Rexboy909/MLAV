@@ -32,7 +32,7 @@ fn reinit_audio() {
         .open_stream()
         .expect("Failed to open audio stream");
 
-    sink.log_on_drop(false); // suppress the drop message
+    sink.log_on_drop(false);
 
     let player = Player::connect_new(&sink.mixer());
 
@@ -43,7 +43,7 @@ fn reinit_audio() {
     });
 }
 
-fn watch_device_changes() {
+fn watch_device_changes() { //lets not start a memory leak next time yeah?
     thread::spawn(|| {
         let mut last_device = default_device_name();
         loop {
@@ -103,8 +103,18 @@ pub fn toggle_playback() {
 }
 
 pub fn rewind_playback() {
+    let was_playing = if let Some(state) = get_state().lock().unwrap().as_ref() {
+        !state.player.is_paused()
+    } else { false };
+
     if let Some(state) = get_state().lock().unwrap().as_ref() {
-        state.player.try_seek(Duration::ZERO).ok();
+        state.player.stop();
+    }
+
+    load_output();
+
+    if was_playing {
+        start_playback();
     }
 }
 
