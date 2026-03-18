@@ -12,6 +12,11 @@ struct AudioState {
 }
 
 static AUDIO: OnceLock<Mutex<Option<AudioState>>> = OnceLock::new();
+static CURRENT_SONG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn get_current_song() -> &'static Mutex<Option<String>> {
+    CURRENT_SONG.get_or_init(|| Mutex::new(None))
+}
 
 fn get_state() -> &'static Mutex<Option<AudioState>> {
     AUDIO.get_or_init(|| Mutex::new(None))
@@ -64,8 +69,8 @@ fn default_device_name() -> Option<String> {
         .and_then(|d| d.name().ok())
 }
 
-pub fn load_output() {
-    let path = "songs/example.mp3";
+pub fn load_song(path: &str) {
+    eprintln!("load_song called with path: {}", path);
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
@@ -74,9 +79,17 @@ pub fn load_output() {
         Ok(s) => s,
         Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
     };
+    // Save path before locking audio state to avoid any lock ordering issues
+    {
+        *get_current_song().lock().unwrap() = Some(path.to_string());
+    }
     if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.stop();
         state.player.append(source);
         state.player.pause();
+        eprintln!("load_song: appended and paused");
+    } else {
+        eprintln!("load_song: audio state not initialized!");
     }
 }
 
@@ -107,11 +120,25 @@ pub fn rewind_playback() {
         !state.player.is_paused()
     } else { false };
 
+    let current = get_current_song().lock().unwrap().clone();
+
     if let Some(state) = get_state().lock().unwrap().as_ref() {
         state.player.stop();
     }
 
-    load_output();
+    if let Some(path) = current {
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
+        };
+        let source = match Decoder::new(BufReader::new(file)) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
+        };
+        if let Some(state) = get_state().lock().unwrap().as_ref() {
+            state.player.append(source);
+        }
+    }
 
     if was_playing {
         start_playback();

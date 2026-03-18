@@ -9,6 +9,7 @@ dependencies = [
  "cpal",
  "id3",
  "macroquad",
+ "miniquad",
  "once_cell",
  "rodio",
  "winres",

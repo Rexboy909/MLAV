@@ -1,8 +1,12 @@
 use macroquad::prelude::*;
 use once_cell::sync::OnceCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::collections::HashSet;
 use crate::library::{self, LibraryNode};
 use crate::player;
+
+static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
 
@@ -18,11 +22,14 @@ const SIDEBAR_BG_COLOR: Color = Color::new(100.0/255.0, 100.0/255.0, 100.0/255.0
 //--main ui drawing function--//
 pub fn draw_main_ui() {
 
-    let w = screen_width().max(1110.0);
-    let h = screen_height().max(683.0);
+    let w = screen_width().max(512.0);
+    let h = screen_height().max(512.0);
 
     clear_background(BG_COLOR);
-    
+
+    draw_visualizer(w,h);
+
+
     // --sidebar/bottom bar--//
     // sidebar
     let sidebar_x = 30.0;
@@ -39,30 +46,60 @@ pub fn draw_main_ui() {
     draw_play_pause_button(w,h);
     draw_rewind_button(w,h);
     draw_fast_forward_button(w,h);
-    draw_visualizer(w,h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
-fn draw_visualizer(w: f32, _h: f32) { // for now only a photo
-    if let Some(tex) = LOGO_TEXTURE.get() {
-        let scale = 1.0;
-        draw_texture_ex(tex, w - tex.width() - 60.0   , 30.0, WHITE, DrawTextureParams {
-            dest_size: Some(vec2(tex.width() * scale, tex.height() * scale)),
-            ..Default::default()
-        });
+fn draw_visualizer(w: f32, h: f32) {
+    let vis_x = (w - (w - 250.0)) as i32;
+    let vis_y = 30_i32;
+    let vis_w = (w - 280.0) as i32;
+    let vis_h = (h - 180.0) as i32;
+
+    unsafe {
+        miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
+        let screen_h = screen_height() as i32;
+        miniquad::gl::glScissor(
+            vis_x,
+            screen_h - vis_y - vis_h,  // flip y
+            vis_w,
+            vis_h,
+        );
     }
+
+    set_camera(&Camera3D {
+        position: vec3(0.0, 2.0, 5.0),
+        target: vec3(0.0, 0.0, 0.0),
+        up: vec3(0.0, 1.0, 0.0),
+        viewport: Some((vis_x, vis_y, vis_w, vis_h)),
+        ..Default::default()
+    });
+
+    set_default_camera();
+
+    unsafe { // I hate opengl so much
+        miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+    }
+
+    draw_rectangle_lines(
+        vis_x as f32,
+        vis_y as f32,
+        vis_w as f32,
+        vis_h as f32,
+        4.0,
+        WHITE,
+    );
 }
 
 fn draw_library(x: f32, y: f32, w: f32, h: f32) {
     let mut current_y = y + 10.0;
     library::with_library(|root| {
         if let Some(node) = root {
-            draw_node(node, 0, x, y + h, y, &mut current_y, true, &vec![]);
+            draw_node(node, 0, x, y + h, y, &mut current_y, true, &vec![], "root");
         }
     });
 }
 
-fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: &mut f32, is_last: bool, open_depths: &Vec<bool>) {
+fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: &mut f32, is_last: bool, open_depths: &Vec<bool>, path: &str) {
     if *y > max_y { return; }
 
     let font_size = 16;
@@ -71,11 +108,7 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
     let mut prefix = String::new();
     for i in 0..depth as usize {
         if i == depth as usize - 1 {
-            if is_last {
-                prefix.push_str("└─ ");
-            } else {
-                prefix.push_str("├─ ");
-            }
+            if is_last { prefix.push_str("└─ "); } else { prefix.push_str("├─ "); }
         } else if open_depths[i] {
             prefix.push_str("│  ");
         } else {
@@ -83,12 +116,46 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
         }
     }
 
+    let is_folder = matches!(node, LibraryNode::Folder { .. });
+    let collapsed = is_folder && get_collapsed().contains(path);
+
     let (label, color) = match node {
-        LibraryNode::Folder { name, .. } => (format!("{}{}/", prefix, name), WHITE),
+        LibraryNode::Folder { name, .. } => {
+            let arrow = if collapsed { "▶ " } else { "▼ " };
+            (format!("{}{}{}/", prefix, arrow, name), WHITE)
+        },
         LibraryNode::Track(song) => (format!("{}{}", prefix, song.title), LIGHTGRAY),
     };
+    let label = truncate_to_fit(&label, 160.0, font_size);
 
-    draw_text_ex(&label, x + 5.0, *y + font_size as f32, TextParams {
+    let text_y = *y + font_size as f32;
+
+    // Check click on this row
+    let mouse = mouse_position();
+    let row_x = x + 5.0;
+    let row_w = 160.0;
+    let row_h = line_height;
+    let row_clicked = mouse.0 >= row_x && mouse.0 <= row_x + row_w
+        && mouse.1 >= *y && mouse.1 <= *y + row_h
+        && is_mouse_button_pressed(MouseButton::Left);
+
+    if is_folder {
+        if row_clicked {
+            let mut collapsed_set = get_collapsed();
+            if collapsed_set.contains(path) {
+                collapsed_set.remove(path);
+            } else {
+                collapsed_set.insert(path.to_string());
+            }
+        }
+    } else if let LibraryNode::Track(song) = node {
+        if row_clicked {
+            IS_PLAYING.store(false, Ordering::Relaxed);
+            player::load_song(&song.path);
+        }
+    }
+
+    draw_text_ex(&label, x + 5.0, text_y, TextParams {
         font: FONT.get(),
         font_size,
         color,
@@ -96,16 +163,23 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
     });
     *y += line_height;
 
-    if let LibraryNode::Folder { children, .. } = node {
+    // Skip children if collapsed
+    if collapsed { return; }
+
+    if let LibraryNode::Folder { name, children } = node {
         let len = children.len();
         let mut new_depths = open_depths.clone();
         new_depths.push(!is_last);
         for (i, child) in children.iter().enumerate() {
-            draw_node(child, depth + 1, x, max_y, min_y, y, i == len - 1, &new_depths);
+            let child_path = format!("{}/{}", path, name);
+            draw_node(child, depth + 1, x, max_y, min_y, y, i == len - 1, &new_depths, &child_path);
         }
     }
 }
 
+fn get_collapsed() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    COLLAPSED_FOLDERS.get_or_init(|| Mutex::new(HashSet::new())).lock().unwrap()
+}
 fn truncate_to_fit(text: &str, max_width: f32, font_size: u16) -> String {
     let font = FONT.get();
     let mut result = text.to_string();
@@ -116,7 +190,6 @@ fn truncate_to_fit(text: &str, max_width: f32, font_size: u16) -> String {
         }
         result.pop();
     }
-    // add ellipsis if we truncated
     if result.len() < text.len() {
         result.push('…');
     }
