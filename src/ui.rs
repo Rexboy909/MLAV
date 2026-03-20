@@ -57,29 +57,42 @@ fn draw_visualizer(w: f32, h: f32) {
     let vis_w = (w - 280.0) as i32;
     let vis_h = (h - 180.0) as i32;
 
-    unsafe {
-        miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
-        let screen_h = screen_height() as i32;
-        miniquad::gl::glScissor(
-            vis_x,
-            screen_h - vis_y - vis_h,  // flip y
-            vis_w,
-            vis_h,
-        );
-    }
+    // unsafe {
+    //     miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
+    //     let screen_h = screen_height() as i32;
+    //     miniquad::gl::glScissor(
+    //         vis_x,
+    //         screen_h - vis_y - vis_h,  // flip y
+    //         vis_w,
+    //         vis_h,
+    //     );
+    // }
 
-    set_camera(&Camera3D {
-        position: vec3(0.0, 2.0, 5.0),
-        target: vec3(0.0, 0.0, 0.0),
-        up: vec3(0.0, 1.0, 0.0),
-        viewport: Some((vis_x, vis_y, vis_w, vis_h)),
-        ..Default::default()
-    });
+    // set_camera(&Camera3D {
+    //     position: vec3(0.0, 2.0, 5.0),
+    //     target: vec3(0.0, 0.0, 0.0),
+    //     up: vec3(0.0, 1.0, 0.0),
+    //     viewport: Some((vis_x, vis_y, vis_w, vis_h)),
+    //     ..Default::default()
+    // });
 
-    set_default_camera();
+    // set_default_camera();
 
-    unsafe { // I hate opengl so much
-        miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+    // unsafe { // I hate opengl so much
+    //     miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+    // }
+
+    //spectrum bars
+    let num_bins: usize = 64;
+    let spectrum = player::get_spectrum(num_bins);
+    let bar_w = vis_w as f32 / num_bins as f32;
+    for (i, &mag) in spectrum.iter().enumerate() {
+        let bar_h = mag * (vis_h as f32 - 4.0);
+        let bx = vis_x as f32 + i as f32 * bar_w;
+        let by = vis_y as f32 + vis_h as f32 - bar_h - 2.0;
+        let t = i as f32 / num_bins as f32;
+        let bar_color = Color::new(t, 0.2, 1.0 - t, 0.9);
+        draw_rectangle(bx + 1.0, by, bar_w - 2.0, bar_h, bar_color);
     }
 
     draw_rectangle_lines(
