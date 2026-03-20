@@ -1,10 +1,136 @@
-use std::fs::File;
+﻿use std::fs::File;
 use std::io::BufReader;
-use std::sync::{Mutex, OnceLock};
+use std::num::NonZero;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::VecDeque;
 use std::time::Duration;
 use std::thread;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use rustfft::{FftPlanner, num_complex::Complex};
 use cpal::traits::{DeviceTrait, HostTrait};
+
+//sample capture ring-buffer
+
+const CAPTURE_LEN: usize = 4096; // keep the most recent N f32 samples
+
+static SAMPLE_BUFFER: OnceLock<Arc<Mutex<VecDeque<f32>>>> = OnceLock::new();
+static SAMPLE_RATE: OnceLock<Mutex<u32>> = OnceLock::new();
+static SMOOTHED_SPECTRUM: OnceLock<Mutex<Vec<f32>>> = OnceLock::new();
+
+fn sample_buffer() -> Arc<Mutex<VecDeque<f32>>> {
+    SAMPLE_BUFFER.get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(CAPTURE_LEN)))).clone()
+}
+
+/// A thin `Source` wrapper that copies every sample it yields into a shared ring buffer.
+struct SampleCapture<S: Source<Item = f32> + Iterator<Item = f32>> {
+    inner: S,
+    buffer: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl<S: Source<Item = f32> + Iterator<Item = f32>> Iterator for SampleCapture<S> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let s = self.inner.next()?;
+        if let Ok(mut buf) = self.buffer.try_lock() {
+            buf.push_back(s);
+            if buf.len() > CAPTURE_LEN {
+                buf.pop_front();
+            }
+        }
+        Some(s)
+    }
+}
+
+impl<S: Source<Item = f32> + Iterator<Item = f32>> Source for SampleCapture<S> {
+    fn current_span_len(&self) -> Option<usize> { self.inner.current_span_len() }
+    fn channels(&self) -> NonZero<u16> { self.inner.channels() }
+    fn sample_rate(&self) -> NonZero<u32> { self.inner.sample_rate() }
+    fn total_duration(&self) -> Option<Duration> { self.inner.total_duration() }
+}
+
+//FFT helper
+
+/// Returns `num_bins` frequency-magnitude values (linear scale, 0-based from DC).
+/// Call this every frame from the UI to feed the visualizer.
+pub fn get_spectrum(num_bins: usize) -> Vec<f32> {
+    let raw: Vec<f32> = {
+        let buf = sample_buffer();
+        let guard = buf.lock().unwrap();
+        guard.iter().copied().collect()
+    };
+
+    let fft_size = raw.len().next_power_of_two().min(CAPTURE_LEN);
+    if fft_size < 2 { return vec![0.0; num_bins]; }
+
+    // Hann window
+    let mut input: Vec<Complex<f32>> = (0..fft_size)
+        .map(|i| {
+            let sample = *raw.get(raw.len().saturating_sub(fft_size) + i).unwrap_or(&0.0);
+            let window = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (fft_size - 1) as f32).cos());
+            Complex { re: sample * window, im: 0.0 }
+        })
+        .collect();
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(fft_size);
+    fft.process(&mut input);
+
+    let half = fft_size / 2;
+    let scale = 1.0 / fft_size as f32;
+    let mags: Vec<f32> = input[..half].iter().map(|c| c.norm() * scale).collect();
+
+    // ── logarithmic frequency bucketing ──────────────────────────────────
+    // Iterate over output bars, not FFT bins — guarantees every bar gets a value.
+    let sample_rate = *SAMPLE_RATE.get_or_init(|| Mutex::new(44100)).lock().unwrap() as f32;
+    let freq_per_bin = sample_rate / fft_size as f32;
+    let f_min: f32 = 20.0;
+    let f_max: f32 = (sample_rate / 2.0).min(20000.0);
+    let log_min = f_min.log2();
+    let log_max = f_max.log2();
+
+    let mut out = vec![0.0f32; num_bins];
+    for bar in 0..num_bins {
+        // frequency range this bar covers
+        let t_lo = bar as f32 / num_bins as f32;
+        let t_hi = (bar + 1) as f32 / num_bins as f32;
+        let freq_lo = 2.0_f32.powf(log_min + t_lo * (log_max - log_min));
+        let freq_hi = 2.0_f32.powf(log_min + t_hi * (log_max - log_min));
+
+        let i_lo = ((freq_lo / freq_per_bin) as usize).max(1).min(half - 1);
+        let i_hi = ((freq_hi / freq_per_bin) as usize).max(1).min(half - 1);
+
+        // if the range covers multiple FFT bins take the max; otherwise interpolate
+        if i_hi > i_lo {
+            out[bar] = mags[i_lo..=i_hi].iter().cloned().fold(0.0_f32, f32::max);
+        } else {
+            // sub-bin resolution: linearly interpolate between adjacent bins
+            let frac = (freq_lo / freq_per_bin) - i_lo as f32;
+            let a = mags[i_lo];
+            let b = *mags.get(i_lo + 1).unwrap_or(&a);
+            out[bar] = a + frac * (b - a);
+        }
+    }
+
+    // dB magnitude scale → 0..1
+    // maps [-80 dB, 0 dB] linearly onto [0.0, 1.0]
+    const DB_FLOOR: f32 = -80.0;
+    for v in out.iter_mut() {
+        let db = 20.0 * v.log10().max(DB_FLOOR / 20.0);
+        *v = ((db - DB_FLOOR) / (-DB_FLOOR)).clamp(0.0, 1.0);
+    }
+
+    // per-frame smoothing
+    let smoothed = SMOOTHED_SPECTRUM.get_or_init(|| Mutex::new(vec![0.0; num_bins]));
+    let mut sm = smoothed.lock().unwrap();
+    if sm.len() != num_bins { *sm = vec![0.0; num_bins]; }
+    const DECAY: f32 = 0.80; // 0 = no smoothing, closer to 1 = slower decay
+    for (s, &n) in sm.iter_mut().zip(out.iter()) {
+        if n > *s { *s = n; }          // instant attack
+        else { *s *= DECAY; }          // gradual decay
+    }
+    sm.clone()
+}
+
 
 struct AudioState {
     player: Player,
@@ -75,11 +201,23 @@ pub fn load_song(path: &str) {
         Ok(f) => f,
         Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
     };
-    let source = match Decoder::new(BufReader::new(file)) {
+    let decoder = match Decoder::new(BufReader::new(file)) {
         Ok(s) => s,
         Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
     };
-    // Save path before locking audio state to avoid any lock ordering issues
+
+    // Store sample rate so get_spectrum can compute real Hz values
+    *SAMPLE_RATE.get_or_init(|| Mutex::new(44100)).lock().unwrap()
+        = decoder.sample_rate().get();
+
+    // Clear old samples so the visualizer doesn't show stale data
+    sample_buffer().lock().unwrap().clear();
+
+    let source = SampleCapture {
+        inner: decoder,
+        buffer: sample_buffer(),
+    };
+
     {
         *get_current_song().lock().unwrap() = Some(path.to_string());
     }
@@ -131,9 +269,14 @@ pub fn rewind_playback() {
             Ok(f) => f,
             Err(e) => { eprintln!("Could not open '{}': {}", path, e); return; }
         };
-        let source = match Decoder::new(BufReader::new(file)) {
+        let decoder = match Decoder::new(BufReader::new(file)) {
             Ok(s) => s,
             Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
+        };
+        sample_buffer().lock().unwrap().clear();
+        let source = SampleCapture {
+            inner: decoder,
+            buffer: sample_buffer(),
         };
         if let Some(state) = get_state().lock().unwrap().as_ref() {
             state.player.append(source);
@@ -149,5 +292,6 @@ pub fn fast_forward_playback() {
     if let Some(state) = get_state().lock().unwrap().as_ref() {
         let pos = state.player.get_pos();
         state.player.try_seek(pos + Duration::from_secs(10)).ok();
+
     }
 }
