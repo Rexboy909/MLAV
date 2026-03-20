@@ -9,6 +9,7 @@ use crate::player;
 static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
+static SELECTED_SONG: OnceCell<Mutex<Option<String>>> = OnceCell::new();
 
 //--other statics--//
 static LOGO_TEXTURE: OnceCell<Texture2D> = OnceCell::new();
@@ -18,6 +19,7 @@ static FONT: OnceCell<Font> = OnceCell::new();
 
 const BG_COLOR: Color = Color::new(53.0/255.0, 16.0/255.0, 108.0/255.0, 1.0);
 const SIDEBAR_BG_COLOR: Color = Color::new(100.0/255.0, 100.0/255.0, 100.0/255.0, 1.0);
+const HIGHLIGHT_COLOR: Color = Color::new(1.0, 1.0, 1.0, 0.15);
 
 //--main ui drawing function--//
 pub fn draw_main_ui() {
@@ -152,6 +154,19 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
         if row_clicked {
             IS_PLAYING.store(false, Ordering::Relaxed);
             player::load_song(&song.path);
+            *SELECTED_SONG.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+                Some(song.path.clone());
+        }
+    }
+
+    // Draw highlight behind selected track
+    if let LibraryNode::Track(song) = node {
+        let selected = SELECTED_SONG
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap();
+        if selected.as_deref() == Some(song.path.as_str()) {
+            draw_rectangle(row_x, *y, row_w, row_h, HIGHLIGHT_COLOR);
         }
     }
 
