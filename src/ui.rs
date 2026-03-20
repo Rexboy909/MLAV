@@ -36,7 +36,7 @@ pub fn draw_main_ui() {
     // sidebar
     let sidebar_x = 30.0;
     let sidebar_y = 30.0;
-    let sidebar_w = 180.0;
+    let sidebar_w = 240.0;
     let sidebar_h = h - 180.0;
     draw_rectangle(sidebar_x, sidebar_y, sidebar_w, sidebar_h, SIDEBAR_BG_COLOR);
     draw_library(sidebar_x, sidebar_y, sidebar_w, sidebar_h);
@@ -52,9 +52,9 @@ pub fn draw_main_ui() {
 }
 
 fn draw_visualizer(w: f32, h: f32) {
-    let vis_x = (w - (w - 250.0)) as i32;
+    let vis_x = (w - (w - 300.0)) as i32;
     let vis_y = 30_i32;
-    let vis_w = (w - 280.0) as i32;
+    let vis_w = (w - 330.0) as i32;
     let vis_h = (h - 180.0) as i32;
 
     // unsafe {
@@ -141,7 +141,7 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
         },
         LibraryNode::Track(song) => (format!("{}{}", prefix, song.title), LIGHTGRAY),
     };
-    let label = truncate_to_fit(&label, 160.0, font_size);
+    let label = truncate_to_fit(&label, 220.0, font_size);
 
     let text_y = *y + font_size as f32;
 

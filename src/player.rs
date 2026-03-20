@@ -79,8 +79,8 @@ pub fn get_spectrum(num_bins: usize) -> Vec<f32> {
     let scale = 1.0 / fft_size as f32;
     let mags: Vec<f32> = input[..half].iter().map(|c| c.norm() * scale).collect();
 
-    // ── logarithmic frequency bucketing ──────────────────────────────────
-    // Iterate over output bars, not FFT bins — guarantees every bar gets a value.
+    // logarithmic frequency bucketing
+    // Iterate over output bars
     let sample_rate = *SAMPLE_RATE.get_or_init(|| Mutex::new(44100)).lock().unwrap() as f32;
     let freq_per_bin = sample_rate / fft_size as f32;
     let f_min: f32 = 20.0;
