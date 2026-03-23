@@ -13,6 +13,13 @@
 4. Exception handling
 -  The goal is that if, for some reason, something doesnt work or loads incorrectly, the program can adapt and not crash.
 
+## Current Features:
+1. Sound output
+2. Song Selection and Navigation
+3. Several sound formats supported
+4. A simple 2d visualizer
+5. a 3d Visualiser is being worked on, not yet completed
+
 ## Compile instructions (Executables will be provided at a later date):
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
 - Go to the site
