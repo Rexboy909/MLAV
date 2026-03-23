@@ -10,6 +10,7 @@ static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
 static SELECTED_SONG: OnceCell<Mutex<Option<String>>> = OnceCell::new();
+static VISUALIZER_TYPE: OnceCell<Mutex<char>> = OnceCell::new();
 
 //--other statics--//
 static LOGO_TEXTURE: OnceCell<Texture2D> = OnceCell::new();
@@ -48,6 +49,7 @@ pub fn draw_main_ui() {
     draw_play_pause_button(w,h);
     draw_rewind_button(w,h);
     draw_fast_forward_button(w,h);
+    draw_visualizer_type_buttons(w, h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
@@ -105,7 +107,7 @@ fn draw_visualizer(w: f32, h: f32) {
     );
 }
 
-fn draw_library(x: f32, y: f32, w: f32, h: f32) {
+fn draw_library(x: f32, y: f32, _w: f32, h: f32) {
     let mut current_y = y + 10.0;
     library::with_library(|root| {
         if let Some(node) = root {
@@ -241,6 +243,38 @@ fn draw_button_rect(x: f32, y: f32, w: f32, h: f32, label: &str, ch: Color, c: C
     });
 
     clicked
+}
+
+fn draw_visualizer_type_buttons(w: f32, h: f32) {
+    let current = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
+
+    // 2D button
+    let is_2d_selected = current == '2';
+    let (bg_2d, text_2d) = if is_2d_selected {
+        (LIGHTGRAY, BLACK)
+    } else {
+        (SIDEBAR_BG_COLOR, WHITE)
+    };
+    if draw_button_rect(
+        300.0, 30.0, 50.0, 35.0,
+        "2D", LIGHTGRAY, bg_2d, BLACK, text_2d, WHITE,
+    ) {
+        *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '2';
+    }
+
+    // 3D button
+    let is_3d_selected = current == '3';
+    let (bg_3d, text_3d) = if is_3d_selected {
+        (LIGHTGRAY, BLACK)
+    } else {
+        (SIDEBAR_BG_COLOR, WHITE)
+    };
+    if draw_button_rect(
+        350.0, 30.0, 50.0, 35.0,
+        "3D", LIGHTGRAY, bg_3d, BLACK, text_3d, WHITE,
+    ) {
+        *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '3';
+    }
 }
 
 fn draw_fast_forward_button(w: f32, h: f32) -> bool {
