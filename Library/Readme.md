@@ -1,0 +1,2 @@
+Punk2000s_guitar_DI by Epan1 -- https://freesound.org/s/848204/ -- License: Attribution NonCommercial 4.0
+Piano loops 200 octave down long loop 120 bpm by josefpres -- https://freesound.org/s/848303/ -- License: Creative Commons 0

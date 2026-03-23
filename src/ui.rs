@@ -49,7 +49,7 @@ pub fn draw_main_ui() {
     draw_play_pause_button(w,h);
     draw_rewind_button(w,h);
     draw_fast_forward_button(w,h);
-    draw_visualizer_type_buttons(w, h);
+    //draw_visualizer_type_buttons(w, h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
@@ -150,7 +150,7 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
     // Check click on this row
     let mouse = mouse_position();
     let row_x = x + 5.0;
-    let row_w = 160.0;
+    let row_w = 220.0;
     let row_h = line_height;
     let row_clicked = mouse.0 >= row_x && mouse.0 <= row_x + row_w
         && mouse.1 >= *y && mouse.1 <= *y + row_h
