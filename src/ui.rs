@@ -49,7 +49,9 @@ pub fn draw_main_ui() {
     draw_play_pause_button(w,h);
     draw_rewind_button(w,h);
     draw_fast_forward_button(w,h);
-    //draw_visualizer_type_buttons(w, h);
+
+    //visualizer stuffs
+    draw_visualizer_type_buttons();
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
@@ -245,7 +247,7 @@ fn draw_button_rect(x: f32, y: f32, w: f32, h: f32, label: &str, ch: Color, c: C
     clicked
 }
 
-fn draw_visualizer_type_buttons(w: f32, h: f32) {
+fn draw_visualizer_type_buttons() {
     let current = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
 
     // 2D button
