@@ -146,6 +146,11 @@ fn draw_visualizer_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
 
     unsafe {
         miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+        // Explicitly restore the full-screen GL viewport.
+        // macroquad's set_default_camera() restores the projection matrix but does
+        // NOT call glViewport when a Camera3D viewport was active, so subsequent
+        // 2D draws (sidebar, bottom bar) get clipped to the old 3D viewport region.
+        miniquad::gl::glViewport(0, 0, screen_width() as i32, screen_height() as i32);
     }
 }
 
@@ -348,13 +353,13 @@ fn draw_play_pause_button(w: f32, h: f32) -> bool {
 }
 
 pub async fn load_assets() {
-    println!("Loading assets...");
-    match load_texture("assets/images/Internet_Example.png").await {
-        Ok(tex) => { LOGO_TEXTURE.set(tex).ok(); println!("Texture loaded"); }
-        Err(e) => { eprintln!("Failed to load texture: {}", e); }
+    // Font is embedded at compile time — works in any deployed binary with no asset folder needed.
+    match load_ttf_font_from_bytes(include_bytes!("../assets/fonts/DejaVuSansMono.ttf")) {
+        Ok(font) => { FONT.set(font).ok(); }
+        Err(e) => { eprintln!("Failed to load embedded font: {}", e); }
     }
-    match load_ttf_font("assets/fonts/DejaVuSansMono.ttf").await {
-        Ok(font) => { FONT.set(font).ok(); println!("Font loaded"); }
-        Err(e) => { eprintln!("Failed to load font: {}", e); }
+    // Texture is optional — only used as a logo, failure is non-fatal.
+    if let Ok(tex) = load_texture("assets/images/Internet_Example.png").await {
+        LOGO_TEXTURE.set(tex).ok();
     }
 }
