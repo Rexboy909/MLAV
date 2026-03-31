@@ -16,6 +16,11 @@ const CAPTURE_LEN: usize = 4096; // keep the most recent N f32 samples
 static SAMPLE_BUFFER: OnceLock<Arc<Mutex<VecDeque<f32>>>> = OnceLock::new();
 static SAMPLE_RATE: OnceLock<Mutex<u32>> = OnceLock::new();
 static SMOOTHED_SPECTRUM: OnceLock<Mutex<Vec<f32>>> = OnceLock::new();
+static LAST_SPECTRUM_TIME: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
+
+fn get_last_spectrum_time() -> &'static Mutex<std::time::Instant> {
+    LAST_SPECTRUM_TIME.get_or_init(|| Mutex::new(std::time::Instant::now()))
+}
 
 fn sample_buffer() -> Arc<Mutex<VecDeque<f32>>> {
     SAMPLE_BUFFER.get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(CAPTURE_LEN)))).clone()
@@ -25,16 +30,24 @@ fn sample_buffer() -> Arc<Mutex<VecDeque<f32>>> {
 struct SampleCapture<S: Source<Item = f32> + Iterator<Item = f32>> {
     inner: S,
     buffer: Arc<Mutex<VecDeque<f32>>>,
+    channels: u16,
+    channel_acc: Vec<f32>, // accumulate one frame of channels before storing
 }
 
 impl<S: Source<Item = f32> + Iterator<Item = f32>> Iterator for SampleCapture<S> {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
         let s = self.inner.next()?;
-        if let Ok(mut buf) = self.buffer.try_lock() {
-            buf.push_back(s);
-            if buf.len() > CAPTURE_LEN {
-                buf.pop_front();
+        self.channel_acc.push(s);
+        // Once we have a full interleaved frame, downmix to mono and store
+        if self.channel_acc.len() >= self.channels as usize {
+            let mono = self.channel_acc.iter().sum::<f32>() / self.channels as f32;
+            self.channel_acc.clear();
+            if let Ok(mut buf) = self.buffer.try_lock() {
+                buf.push_back(mono);
+                if buf.len() > CAPTURE_LEN {
+                    buf.pop_front();
+                }
             }
         }
         Some(s)
@@ -119,14 +132,30 @@ pub fn get_spectrum(num_bins: usize) -> Vec<f32> {
         *v = ((db - DB_FLOOR) / (-DB_FLOOR)).clamp(0.0, 1.0);
     }
 
-    // per-frame smoothing
+    // Time-based smoothing — frame-rate independent
+    let dt = {
+        let mut last = get_last_spectrum_time().lock().unwrap();
+        let elapsed = last.elapsed().as_secs_f32().min(0.1); // cap so paused frames don't explode
+        *last = std::time::Instant::now();
+        elapsed
+    };
+
+    // Tune these: half-life = time for a value to travel halfway toward target
+    const ATTACK_HALF_LIFE: f32 = 0.025; // 25ms — fast rise
+    const DECAY_HALF_LIFE: f32  = 0.200; // 200ms — slower fall
+
+    let attack_k = 1.0 - 0.5_f32.powf(dt / ATTACK_HALF_LIFE);
+    let decay_k  = 0.5_f32.powf(dt / DECAY_HALF_LIFE);
+
     let smoothed = SMOOTHED_SPECTRUM.get_or_init(|| Mutex::new(vec![0.0; num_bins]));
     let mut sm = smoothed.lock().unwrap();
     if sm.len() != num_bins { *sm = vec![0.0; num_bins]; }
-    const DECAY: f32 = 0.80; // 0 = no smoothing, closer to 1 = slower decay
     for (s, &n) in sm.iter_mut().zip(out.iter()) {
-        if n > *s { *s = n; }          // instant attack
-        else { *s *= DECAY; }          // gradual decay
+        if n >= *s {
+            *s += (n - *s) * attack_k; // lerp toward new peak
+        } else {
+            *s *= decay_k;             // exponential fall-off
+        }
     }
     sm.clone()
 }
@@ -207,6 +236,7 @@ pub fn load_song(path: &str) {
     };
 
     // Store sample rate so get_spectrum can compute real Hz values
+    let num_channels = decoder.channels().get();
     *SAMPLE_RATE.get_or_init(|| Mutex::new(44100)).lock().unwrap()
         = decoder.sample_rate().get();
 
@@ -216,6 +246,8 @@ pub fn load_song(path: &str) {
     let source = SampleCapture {
         inner: decoder,
         buffer: sample_buffer(),
+        channels: num_channels,
+        channel_acc: Vec::with_capacity(num_channels as usize),
     };
 
     {
@@ -274,9 +306,12 @@ pub fn rewind_playback() {
             Err(e) => { eprintln!("Could not decode audio: {}", e); return; }
         };
         sample_buffer().lock().unwrap().clear();
+        let num_channels = decoder.channels().get();
         let source = SampleCapture {
             inner: decoder,
             buffer: sample_buffer(),
+            channels: num_channels,
+            channel_acc: Vec::with_capacity(num_channels as usize),
         };
         if let Some(state) = get_state().lock().unwrap().as_ref() {
             state.player.append(source);

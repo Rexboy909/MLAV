@@ -61,32 +61,26 @@ fn draw_visualizer(w: f32, h: f32) {
     let vis_w = (w - 330.0) as i32;
     let vis_h = (h - 180.0) as i32;
 
-    // unsafe {
-    //     miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
-    //     let screen_h = screen_height() as i32;
-    //     miniquad::gl::glScissor(
-    //         vis_x,
-    //         screen_h - vis_y - vis_h,  // flip y
-    //         vis_w,
-    //         vis_h,
-    //     );
-    // }
+    if vis_w <= 0 || vis_h <= 0 { return; }
 
-    // set_camera(&Camera3D {
-    //     position: vec3(0.0, 2.0, 5.0),
-    //     target: vec3(0.0, 0.0, 0.0),
-    //     up: vec3(0.0, 1.0, 0.0),
-    //     viewport: Some((vis_x, vis_y, vis_w, vis_h)),
-    //     ..Default::default()
-    // });
+    let vis_type = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
+    if vis_type == '3' {
+        draw_visualizer_3d(vis_x, vis_y, vis_w, vis_h);
+    } else {
+        draw_visualizer_2d(vis_x, vis_y, vis_w, vis_h);
+    }
 
-    // set_default_camera();
+    draw_rectangle_lines(
+        vis_x as f32,
+        vis_y as f32,
+        vis_w as f32,
+        vis_h as f32,
+        4.0,
+        WHITE,
+    );
+}
 
-    // unsafe { // I hate opengl so much
-    //     miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
-    // }
-
-    //spectrum bars
+fn draw_visualizer_2d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
     let num_bins: usize = 64;
     let spectrum = player::get_spectrum(num_bins);
     let bar_w = vis_w as f32 / num_bins as f32;
@@ -98,15 +92,61 @@ fn draw_visualizer(w: f32, h: f32) {
         let bar_color = Color::new(t, 0.2, 1.0 - t, 0.9);
         draw_rectangle(bx + 1.0, by, bar_w - 2.0, bar_h, bar_color);
     }
+}
 
-    draw_rectangle_lines(
-        vis_x as f32,
-        vis_y as f32,
-        vis_w as f32,
-        vis_h as f32,
-        4.0,
-        WHITE,
-    );
+fn draw_visualizer_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
+    let screen_h = screen_height() as i32;
+    // OpenGL scissor origin is bottom-left; macroquad vis_y is top-left
+    let gl_y = screen_h - vis_y - vis_h;
+
+    unsafe {
+        miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
+        miniquad::gl::glScissor(vis_x, gl_y, vis_w, vis_h);
+    }
+
+    // Camera3D viewport also uses OpenGL bottom-left convention
+    set_camera(&Camera3D {
+        position: vec3(0.0, 4.5, 9.0),
+        target: vec3(0.0, 0.5, 0.0),
+        up: vec3(0.0, 1.0, 0.0),
+        viewport: Some((vis_x, gl_y, vis_w, vis_h)),
+        ..Default::default()
+    });
+
+    let num_bins: usize = 48;
+    let spectrum = player::get_spectrum(num_bins);
+
+    // tan(22.5°) = √2 - 1 — half the horizontal FOV span per unit of z distance
+    // (macroquad Camera3D uses 45° vFOV and scales horizontally by aspect)
+    let aspect = vis_w as f32 / vis_h as f32;
+    let cam_z = 9.0_f32;
+    let visible_half_w = cam_z * (std::f32::consts::SQRT_2 - 1.0) * aspect;
+    // fit all bars into 90% of the visible width; never exceed a comfortable max
+    let spacing = ((visible_half_w * 2.0 * 0.95) / num_bins as f32).min(0.42);
+    let total_w = num_bins as f32 * spacing;
+    let bar_depth = (spacing * 0.80).min(0.35);
+
+    for (i, &mag) in spectrum.iter().enumerate() {
+        let x = -total_w / 2.0 + i as f32 * spacing + spacing / 2.0;
+        let bar_h = (mag * 5.0).max(0.02);
+        let t = i as f32 / num_bins as f32;
+        let bar_color = Color::new(t, 0.15 + mag * 0.5, 1.0 - t, 1.0);
+        draw_cube(
+            vec3(x, bar_h / 2.0, 0.0),
+            vec3(spacing * 0.80, bar_h, bar_depth),
+            None,
+            bar_color,
+        );
+    }
+
+    // Subtle floor grid
+    draw_grid(20, spacing, Color::new(1.0, 1.0, 1.0, 0.08), Color::new(1.0, 1.0, 1.0, 0.04));
+
+    set_default_camera();
+
+    unsafe {
+        miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+    }
 }
 
 fn draw_library(x: f32, y: f32, _w: f32, h: f32) {

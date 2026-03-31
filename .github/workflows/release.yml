@@ -11,16 +11,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact: my-app-linux-x64
+            artifact: MLAV-linux-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: my-app-windows-x64.exe
+            artifact: MLAV-windows-x64.exe
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: my-app-macos-intel
+            artifact: MLAV-macos-intel
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: my-app-macos-arm
+            artifact: MLAV-macos-arm
 
     runs-on: ${{ matrix.os }}
     steps:
