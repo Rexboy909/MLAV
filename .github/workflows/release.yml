@@ -31,14 +31,24 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools (Linux only)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get install -y musl-tools
+      - name: Install Linux audio + musl deps
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools pkg-config libasound2-dev
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      # Rename the cargo output to the desired artifact name before uploading
+      - name: Rename binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: cp target/${{ matrix.target }}/release/MLAV ${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Copy-Item "target\${{ matrix.target }}\release\MLAV.exe" "${{ matrix.artifact }}"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          files: ${{ matrix.artifact }}
