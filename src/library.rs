@@ -60,7 +60,7 @@ fn build_tree(dir: &str) -> LibraryNode {
 fn is_audio_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("mp3") | Some("wav") | Some("flac") | Some("ogg")
+        Some("mp3") | Some("wav") | Some("flac") | Some("ogg") | Some("aac") | Some("m4a")
     )
 }
 

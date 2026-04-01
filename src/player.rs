@@ -8,7 +8,9 @@ use std::thread;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use rustfft::{FftPlanner, num_complex::Complex};
 use cpal::traits::{DeviceTrait, HostTrait};
-use id3::{Tag, TagLike};
+use lofty::prelude::*;
+use lofty::probe::Probe;
+use lofty::picture::PictureType;
 
 //sample capture ring-buffer
 
@@ -321,54 +323,70 @@ pub fn load_song(path: &str) {
     {
         *get_current_song().lock().unwrap() = Some(path.to_string());
 
-        // Read ID3 metadata + embedded album art
+        // Read metadata using lofty — handles MP3/ID3, FLAC, OGG Vorbis, M4A/AAC, WAV
         let info_lock = CURRENT_SONG_INFO.get_or_init(|| Mutex::new(None));
         let art_lock  = CURRENT_ALBUM_ART.get_or_init(|| Mutex::new(None));
-        if let Ok(tag) = Tag::read_from_path(path) {
-            let title  = tag.title().unwrap_or("Unknown Title").to_string();
-            let artist = tag.artist().unwrap_or("Unknown Artist").to_string();
-            let album  = tag.album().unwrap_or("").to_string();
-            *info_lock.lock().unwrap() = Some((title, artist, album));
 
-            let pic = tag.pictures()
-                .find(|p| p.picture_type == id3::frame::PictureType::CoverFront)
-                .or_else(|| tag.pictures().next());
-            let art = pic.and_then(|p| {
-                image::load_from_memory(&p.data).ok().map(|img| {
-                    let rgba = img.into_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    // Compute average color from every 8th pixel, then darken
-                    let pixels = rgba.as_raw();
-                    let (mut r, mut g, mut b, mut count) = (0u64, 0u64, 0u64, 0u64);
-                    for chunk in pixels.chunks(4 * 8) {
-                        if chunk.len() >= 4 {
-                            r += chunk[0] as u64;
-                            g += chunk[1] as u64;
-                            b += chunk[2] as u64;
-                            count += 1;
-                        }
+        let fallback_title = || std::path::Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        match Probe::open(path).and_then(|p| p.read()) {
+            Ok(tagged_file) => {
+                let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+                if let Some(tag) = tag {
+                    let title  = tag.title().as_deref().unwrap_or("Unknown Title").to_string();
+                    let artist = tag.artist().as_deref().unwrap_or("").to_string();
+                    let album  = tag.album().as_deref().unwrap_or("").to_string();
+                    *info_lock.lock().unwrap() = Some((title, artist, album));
+
+                    // Pick CoverFront, fall back to first available picture
+                    let mut chosen: Option<&lofty::picture::Picture> = None;
+                    for pic in tag.pictures() {
+                        if chosen.is_none() { chosen = Some(pic); }
+                        if pic.pic_type() == PictureType::CoverFront { chosen = Some(pic); break; }
                     }
-                    if count > 0 {
-                        const DARKEN: f32 = 0.4;
-                        *get_bg_color_static().lock().unwrap() = (
-                            (r as f32 / count as f32 / 255.0) * DARKEN,
-                            (g as f32 / count as f32 / 255.0) * DARKEN,
-                            (b as f32 / count as f32 / 255.0) * DARKEN,
-                        );
+                    let art = chosen.and_then(|p| {
+                        image::load_from_memory(p.data()).ok().map(|img| {
+                            let rgba = img.into_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            let pixels = rgba.as_raw();
+                            let (mut r, mut g, mut b, mut count) = (0u64, 0u64, 0u64, 0u64);
+                            for chunk in pixels.chunks(4 * 8) {
+                                if chunk.len() >= 4 {
+                                    r += chunk[0] as u64;
+                                    g += chunk[1] as u64;
+                                    b += chunk[2] as u64;
+                                    count += 1;
+                                }
+                            }
+                            if count > 0 {
+                                const DARKEN: f32 = 0.4;
+                                *get_bg_color_static().lock().unwrap() = (
+                                    (r as f32 / count as f32 / 255.0) * DARKEN,
+                                    (g as f32 / count as f32 / 255.0) * DARKEN,
+                                    (b as f32 / count as f32 / 255.0) * DARKEN,
+                                );
+                            }
+                            (w, h, rgba.into_raw())
+                        })
+                    });
+                    *art_lock.lock().unwrap() = art;
+                    if chosen.is_none() {
+                        *get_bg_color_static().lock().unwrap() = (0.18, 0.18, 0.22);
                     }
-                    (w, h, rgba.into_raw())
-                })
-            });
-            *art_lock.lock().unwrap() = art;
-        } else {
-            // Fallback for non-ID3 formats: use filename as title
-            let title = std::path::Path::new(path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            *info_lock.lock().unwrap() = Some((title, String::new(), String::new()));
-            *art_lock.lock().unwrap()  = None;
-            *get_bg_color_static().lock().unwrap() = (0.18, 0.18, 0.22); // neutral gray
+                } else {
+                    *info_lock.lock().unwrap() = Some((fallback_title(), String::new(), String::new()));
+                    *art_lock.lock().unwrap()  = None;
+                    *get_bg_color_static().lock().unwrap() = (0.18, 0.18, 0.22);
+                }
+            }
+            Err(_) => {
+                *info_lock.lock().unwrap() = Some((fallback_title(), String::new(), String::new()));
+                *art_lock.lock().unwrap()  = None;
+                *get_bg_color_static().lock().unwrap() = (0.18, 0.18, 0.22);
+            }
         }
     }
     if let Some(state) = get_state().lock().unwrap().as_ref() {

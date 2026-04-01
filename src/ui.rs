@@ -385,7 +385,7 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
             IS_PLAYING.store(false, Ordering::Relaxed);
 
             // Build a queue of sibling audio files (same folder, no subdirs)
-            let audio_exts = ["mp3", "wav", "flac", "ogg"];
+            let audio_exts = ["mp3", "wav", "flac", "ogg", "aac", "m4a"];
             let mut siblings: Vec<String> = std::path::Path::new(&song.path)
                 .parent()
                 .and_then(|dir| std::fs::read_dir(dir).ok())
