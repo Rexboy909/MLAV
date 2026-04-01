@@ -330,3 +330,16 @@ pub fn fast_forward_playback() {
 
     }
 }
+
+/// Returns the most recent `num_samples` raw mono waveform samples (−1..1).
+/// Used by the sinewave visualizer.
+pub fn get_samples(num_samples: usize) -> Vec<f32> {
+    let buf = sample_buffer();
+    let guard = buf.lock().unwrap();
+    if guard.is_empty() { return vec![0.0; num_samples]; }
+    let len = guard.len();
+    let start = len.saturating_sub(num_samples);
+    (0..num_samples)
+        .map(|i| *guard.get(start + i.min(len - start - 1)).unwrap_or(&0.0))
+        .collect()
+}

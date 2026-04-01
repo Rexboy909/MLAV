@@ -2,9 +2,10 @@ use macroquad::prelude::*;
 use once_cell::sync::OnceCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use crate::library::{self, LibraryNode};
 use crate::player;
+use rfd::FileDialog;
 
 static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 
@@ -15,6 +16,8 @@ static VISUALIZER_TYPE: OnceCell<Mutex<char>> = OnceCell::new();
 //--other statics--//
 static LOGO_TEXTURE: OnceCell<Texture2D> = OnceCell::new();
 static FONT: OnceCell<Font> = OnceCell::new();
+static WAVE_HISTORY: OnceCell<Mutex<VecDeque<Vec<f32>>>> = OnceCell::new();
+static WAVE_SCROLL_OFFSET: OnceCell<Mutex<f32>> = OnceCell::new();
 
 //--colors--//
 
@@ -40,7 +43,7 @@ pub fn draw_main_ui() {
     let sidebar_w = 240.0;
     let sidebar_h = h - 180.0;
     draw_rectangle(sidebar_x, sidebar_y, sidebar_w, sidebar_h, SIDEBAR_BG_COLOR);
-    draw_library(sidebar_x, sidebar_y, sidebar_w, sidebar_h);
+    draw_library(sidebar_x, sidebar_y, sidebar_w, sidebar_h - 40.0);
 
     // bottom bar things
     draw_rectangle(30.0, h - 120.0, w - 60.0, 90.0, SIDEBAR_BG_COLOR);
@@ -52,6 +55,8 @@ pub fn draw_main_ui() {
 
     //visualizer stuffs
     draw_visualizer_type_buttons();
+
+    draw_library_folder_button(sidebar_x, sidebar_y, sidebar_w, sidebar_h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
@@ -66,6 +71,8 @@ fn draw_visualizer(w: f32, h: f32) {
     let vis_type = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
     if vis_type == '3' {
         draw_visualizer_3d(vis_x, vis_y, vis_w, vis_h);
+    } else if vis_type == 'w' {
+        draw_visualizer_sinewave_3d(vis_x, vis_y, vis_w, vis_h);
     } else {
         draw_visualizer_2d(vis_x, vis_y, vis_w, vis_h);
     }
@@ -151,6 +158,97 @@ fn draw_visualizer_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
         // NOT call glViewport when a Camera3D viewport was active, so subsequent
         // 2D draws (sidebar, bottom bar) get clipped to the old 3D viewport region.
         miniquad::gl::glViewport(0, 0, screen_width() as i32, screen_height() as i32);
+    }
+}
+
+fn draw_visualizer_sinewave_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
+    const NUM_POINTS: usize = 256;
+    const MAX_HISTORY: usize = 36;
+    // How many slots per second the waterfall scrolls (slots/sec = 1 / PUSH_INTERVAL_SECS)
+    const PUSH_INTERVAL_SECS: f32 = 0.08; // 80ms between captures
+
+    let dt = get_frame_time();
+
+    // Advance continuous scroll offset every frame
+    let scroll_frac = {
+        let mut offset = WAVE_SCROLL_OFFSET
+            .get_or_init(|| Mutex::new(0.0_f32))
+            .lock().unwrap();
+        *offset += dt / PUSH_INTERVAL_SECS;
+        // When offset hits 1.0, capture a new frame and roll over
+        if *offset >= 1.0 {
+            *offset -= 1.0;
+            let samples = player::get_samples(NUM_POINTS);
+            let hist = WAVE_HISTORY.get_or_init(|| Mutex::new(VecDeque::with_capacity(MAX_HISTORY)));
+            let mut h = hist.lock().unwrap();
+            h.push_front(samples);
+            if h.len() > MAX_HISTORY { h.pop_back(); }
+        }
+        *offset
+    };
+
+    let screen_h = screen_height() as i32;
+    let gl_y = screen_h - vis_y - vis_h;
+
+    unsafe {
+        miniquad::gl::glEnable(miniquad::gl::GL_SCISSOR_TEST);
+        miniquad::gl::glScissor(vis_x, gl_y, vis_w, vis_h);
+    }
+
+    set_camera(&Camera3D {
+        position: vec3(0.0, 3.5, 7.5),
+        target:   vec3(0.0, 0.0, -10.0),
+        up:       vec3(0.0, 1.0, 0.0),
+        viewport: Some((vis_x, gl_y, vis_w, vis_h)),
+        ..Default::default()
+    });
+
+    let hist = WAVE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()));
+    let h = hist.lock().unwrap();
+
+    let wave_width = 12.0_f32;
+    let z_spacing  = 0.57_f32;
+    let amp_scale  = 2.6_f32;
+
+    for (frame_idx, frame) in h.iter().enumerate() {
+        // scroll_frac (0..1) smoothly shifts every slot backward continuously
+        let z_slot = frame_idx as f32 + scroll_frac;
+        let age   = z_slot / MAX_HISTORY as f32;
+        let alpha = (1.0 - age * 0.88).max(0.05);
+        let z     = -(z_slot * z_spacing);
+
+        // Hue shifts from cyan-purple (new) to deep blue (old)
+        let r = (0.4 - age * 0.4).max(0.0);
+        let g = (0.6 - age * 0.5).max(0.0) * alpha;
+        let b = 1.0 * alpha;
+        let color = Color::new(r, g, b, alpha);
+
+        for i in 1..frame.len() {
+            let t0 = (i - 1) as f32 / (frame.len() - 1) as f32;
+            let t1 = i as f32           / (frame.len() - 1) as f32;
+            let x0 = -wave_width / 2.0 + t0 * wave_width;
+            let x1 = -wave_width / 2.0 + t1 * wave_width;
+            let y0 = frame[i - 1] * amp_scale;
+            let y1 = frame[i]     * amp_scale;
+            draw_line_3d(vec3(x0, y0, z), vec3(x1, y1, z), color);
+        }
+    }
+
+    set_default_camera();
+
+    unsafe {
+        miniquad::gl::glDisable(miniquad::gl::GL_SCISSOR_TEST);
+        miniquad::gl::glViewport(0, 0, screen_width() as i32, screen_height() as i32);
+    }
+}
+
+fn draw_library_folder_button(sidebar_x: f32, sidebar_y: f32, sidebar_w: f32, sidebar_h: f32) {
+    let btn_h = 30.0;
+    let btn_y = sidebar_y + sidebar_h - btn_h;
+    if draw_button_rect(sidebar_x, btn_y, sidebar_w, btn_h, "Folder", LIGHTGRAY, SIDEBAR_BG_COLOR, BLACK, WHITE, WHITE) {
+        if let Some(path) = FileDialog::new().pick_folder() {
+            library::set_root(&path.to_string_lossy());
+        }
     }
 }
 
@@ -321,6 +419,20 @@ fn draw_visualizer_type_buttons() {
         "3D", LIGHTGRAY, bg_3d, BLACK, text_3d, WHITE,
     ) {
         *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '3';
+    }
+
+    // Wave button
+    let is_wave_selected = current == 'w';
+    let (bg_w, text_w) = if is_wave_selected {
+        (LIGHTGRAY, BLACK)
+    } else {
+        (SIDEBAR_BG_COLOR, WHITE)
+    };
+    if draw_button_rect(
+        405.0, 30.0, 80.0, 35.0,
+        "Wave", LIGHTGRAY, bg_w, BLACK, text_w, WHITE,
+    ) {
+        *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = 'w';
     }
 }
 
