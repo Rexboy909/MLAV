@@ -11,6 +11,8 @@ miniquad = "0.4.8"
 once_cell = "1.18"
 rodio = { version = "0.22.2", features = ["wav", "flac", "mp3"] }
 rustfft = "6.2"
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
 
 [build-dependencies]
 winres = "0.1"

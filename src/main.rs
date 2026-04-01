@@ -1,6 +1,7 @@
 mod ui;
 mod player;
 mod library;
+mod lyrics;
 mod song;
 
 use macroquad::prelude::*;
