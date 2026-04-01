@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use once_cell::sync::OnceCell;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::collections::{HashSet, VecDeque};
@@ -19,6 +20,11 @@ static FONT: OnceCell<Font> = OnceCell::new();
 static WAVE_HISTORY: OnceCell<Mutex<VecDeque<Vec<f32>>>> = OnceCell::new();
 static WAVE_SCROLL_OFFSET: OnceCell<Mutex<f32>> = OnceCell::new();
 
+thread_local! {
+    // (cached_song_path, texture)
+    static ALBUM_ART_TEX: RefCell<Option<(String, Texture2D)>> = RefCell::new(None);
+}
+
 //--colors--//
 
 const BG_COLOR: Color = Color::new(53.0/255.0, 16.0/255.0, 108.0/255.0, 1.0);
@@ -31,7 +37,8 @@ pub fn draw_main_ui() {
     let w = screen_width().max(512.0);
     let h = screen_height().max(512.0);
 
-    clear_background(BG_COLOR);
+    let (br, bg, bb) = player::get_bg_color();
+    clear_background(Color::new(br, bg, bb, 1.0));
 
     draw_visualizer(w,h);
 
@@ -57,6 +64,8 @@ pub fn draw_main_ui() {
     draw_visualizer_type_buttons();
 
     draw_library_folder_button(sidebar_x, sidebar_y, sidebar_w, sidebar_h);
+
+    draw_now_playing(h);
     //println!("Screen dimensions: {}x{}", w, h);
 }
 
@@ -242,6 +251,67 @@ fn draw_visualizer_sinewave_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
     }
 }
 
+fn draw_now_playing(h: f32) {
+    let bar_y    = h - 120.0;
+    let art_size = 70.0;
+    let art_x    = 40.0;
+    let art_y    = bar_y + 10.0;
+
+    // Refresh texture cache when song changes
+    let current_path = player::get_current_song_path();
+    ALBUM_ART_TEX.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let stale = match &*cache {
+            Some((cached, _)) => Some(cached.clone()) != current_path,
+            None              => current_path.is_some(),
+        };
+        if stale {
+            *cache = current_path.as_ref().and_then(|p| {
+                player::get_current_album_art_rgba().map(|(w, h, rgba)| {
+                    let tex = Texture2D::from_rgba8(w as u16, h as u16, &rgba);
+                    (p.clone(), tex)
+                })
+            });
+        }
+
+        // Draw album art or placeholder
+        match &*cache {
+            Some((_, tex)) => {
+                draw_texture_ex(tex, art_x, art_y, WHITE, DrawTextureParams {
+                    dest_size: Some(vec2(art_size, art_size)),
+                    ..Default::default()
+                });
+            }
+            None => {
+                draw_rectangle(art_x, art_y, art_size, art_size,
+                    Color::new(0.25, 0.25, 0.35, 1.0));
+                draw_text_ex("♪", art_x + 18.0, art_y + 48.0, TextParams {
+                    font: FONT.get(), font_size: 36, color: WHITE, ..Default::default()
+                });
+            }
+        }
+    });
+
+    // Draw title / artist / album text to the right of the art
+    if let Some((title, artist, album)) = player::get_current_song_info() {
+        let tx = art_x + art_size + 10.0;
+        let max_w = 220.0;
+        draw_text_ex(&truncate_to_fit(&title, max_w, 17), tx, art_y + 19.0, TextParams {
+            font: FONT.get(), font_size: 17, color: WHITE, ..Default::default()
+        });
+        if !artist.is_empty() {
+            draw_text_ex(&truncate_to_fit(&artist, max_w, 14), tx, art_y + 38.0, TextParams {
+                font: FONT.get(), font_size: 14, color: LIGHTGRAY, ..Default::default()
+            });
+        }
+        if !album.is_empty() {
+            draw_text_ex(&truncate_to_fit(&album, max_w, 14), tx, art_y + 56.0, TextParams {
+                font: FONT.get(), font_size: 14, color: LIGHTGRAY, ..Default::default()
+            });
+        }
+    }
+}
+
 fn draw_library_folder_button(sidebar_x: f32, sidebar_y: f32, sidebar_w: f32, sidebar_h: f32) {
     let btn_h = 30.0;
     let btn_y = sidebar_y + sidebar_h - btn_h;
@@ -313,7 +383,33 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
     } else if let LibraryNode::Track(song) = node {
         if row_clicked {
             IS_PLAYING.store(false, Ordering::Relaxed);
+
+            // Build a queue of sibling audio files (same folder, no subdirs)
+            let audio_exts = ["mp3", "wav", "flac", "ogg"];
+            let mut siblings: Vec<String> = std::path::Path::new(&song.path)
+                .parent()
+                .and_then(|dir| std::fs::read_dir(dir).ok())
+                .map(|entries| {
+                    let mut v: Vec<String> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_file())
+                        .filter(|e| {
+                            e.path().extension()
+                                .and_then(|x| x.to_str())
+                                .map(|x| audio_exts.contains(&x))
+                                .unwrap_or(false)
+                        })
+                        .map(|e| e.path().to_string_lossy().to_string())
+                        .collect();
+                    v.sort();
+                    v
+                })
+                .unwrap_or_default();
+            if siblings.is_empty() { siblings.push(song.path.clone()); }
+            let idx = siblings.iter().position(|p| p == &song.path).unwrap_or(0);
+
             player::load_song(&song.path);
+            player::set_queue(siblings, idx);
             *SELECTED_SONG.get_or_init(|| Mutex::new(None)).lock().unwrap() =
                 Some(song.path.clone());
         }
@@ -438,14 +534,23 @@ fn draw_visualizer_type_buttons() {
 
 fn draw_fast_forward_button(w: f32, h: f32) -> bool {
     if draw_button_rect((w/2.0)+20.0, h - 90.0, 40.0, 40.0, ">>", LIGHTGRAY, SIDEBAR_BG_COLOR, BLACK, BLACK, BLACK) {
-        player::fast_forward_playback();
+        IS_PLAYING.store(true, Ordering::Relaxed);
+        player::next_in_queue();
+        // keep SELECTED_SONG in sync
+        if let Some(p) = player::get_current_song_path() {
+            *SELECTED_SONG.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(p);
+        }
     }
     false
 }
 
 fn draw_rewind_button(w: f32, h: f32) -> bool {
     if draw_button_rect((w/2.0)-60.0, h - 90.0, 40.0, 40.0, "<<", LIGHTGRAY, SIDEBAR_BG_COLOR, BLACK, BLACK, BLACK) {
-        player::rewind_playback();
+        IS_PLAYING.store(true, Ordering::Relaxed);
+        player::prev_in_queue();
+        if let Some(p) = player::get_current_song_path() {
+            *SELECTED_SONG.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(p);
+        }
     }
     false
 }

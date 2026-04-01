@@ -8,6 +8,7 @@ use std::thread;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use rustfft::{FftPlanner, num_complex::Complex};
 use cpal::traits::{DeviceTrait, HostTrait};
+use id3::{Tag, TagLike};
 
 //sample capture ring-buffer
 
@@ -17,6 +18,73 @@ static SAMPLE_BUFFER: OnceLock<Arc<Mutex<VecDeque<f32>>>> = OnceLock::new();
 static SAMPLE_RATE: OnceLock<Mutex<u32>> = OnceLock::new();
 static SMOOTHED_SPECTRUM: OnceLock<Mutex<Vec<f32>>> = OnceLock::new();
 static LAST_SPECTRUM_TIME: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
+
+// (title, artist, album)
+static CURRENT_SONG_INFO: OnceLock<Mutex<Option<(String, String, String)>>> = OnceLock::new();
+// (width, height, rgba_bytes)
+static CURRENT_ALBUM_ART: OnceLock<Mutex<Option<(u32, u32, Vec<u8>)>>> = OnceLock::new();
+// background color derived from album art average, darkened
+static CURRENT_BG_COLOR: OnceLock<Mutex<(f32, f32, f32)>> = OnceLock::new();
+// playback queue (sibling songs in the same folder)
+static SONG_QUEUE: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static QUEUE_INDEX: OnceLock<Mutex<usize>> = OnceLock::new();
+
+fn get_queue() -> &'static Mutex<Vec<String>> {
+    SONG_QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
+fn get_queue_index() -> &'static Mutex<usize> {
+    QUEUE_INDEX.get_or_init(|| Mutex::new(0))
+}
+
+fn get_bg_color_static() -> &'static Mutex<(f32, f32, f32)> {
+    CURRENT_BG_COLOR.get_or_init(|| Mutex::new((0.18, 0.18, 0.22)))
+}
+
+pub fn get_current_song_path() -> Option<String> {
+    get_current_song().lock().unwrap().clone()
+}
+
+pub fn get_current_song_info() -> Option<(String, String, String)> {
+    CURRENT_SONG_INFO.get_or_init(|| Mutex::new(None)).lock().unwrap().clone()
+}
+
+pub fn get_current_album_art_rgba() -> Option<(u32, u32, Vec<u8>)> {
+    CURRENT_ALBUM_ART.get_or_init(|| Mutex::new(None)).lock().unwrap().clone()
+}
+
+pub fn get_bg_color() -> (f32, f32, f32) {
+    *get_bg_color_static().lock().unwrap()
+}
+
+/// Set the playback queue and immediately play the entry at `current_idx`.
+pub fn set_queue(paths: Vec<String>, current_idx: usize) {
+    *get_queue_index().lock().unwrap() = current_idx;
+    *get_queue().lock().unwrap() = paths;
+}
+
+pub fn next_in_queue() {
+    let path = {
+        let q = get_queue().lock().unwrap();
+        if q.is_empty() { return; }
+        let mut idx = get_queue_index().lock().unwrap();
+        *idx = (*idx + 1) % q.len();
+        q[*idx].clone()
+    };
+    load_song(&path);
+    start_playback();
+}
+
+pub fn prev_in_queue() {
+    let path = {
+        let q = get_queue().lock().unwrap();
+        if q.is_empty() { return; }
+        let mut idx = get_queue_index().lock().unwrap();
+        *idx = idx.checked_sub(1).unwrap_or(q.len() - 1);
+        q[*idx].clone()
+    };
+    load_song(&path);
+    start_playback();
+}
 
 fn get_last_spectrum_time() -> &'static Mutex<std::time::Instant> {
     LAST_SPECTRUM_TIME.get_or_init(|| Mutex::new(std::time::Instant::now()))
@@ -252,6 +320,56 @@ pub fn load_song(path: &str) {
 
     {
         *get_current_song().lock().unwrap() = Some(path.to_string());
+
+        // Read ID3 metadata + embedded album art
+        let info_lock = CURRENT_SONG_INFO.get_or_init(|| Mutex::new(None));
+        let art_lock  = CURRENT_ALBUM_ART.get_or_init(|| Mutex::new(None));
+        if let Ok(tag) = Tag::read_from_path(path) {
+            let title  = tag.title().unwrap_or("Unknown Title").to_string();
+            let artist = tag.artist().unwrap_or("Unknown Artist").to_string();
+            let album  = tag.album().unwrap_or("").to_string();
+            *info_lock.lock().unwrap() = Some((title, artist, album));
+
+            let pic = tag.pictures()
+                .find(|p| p.picture_type == id3::frame::PictureType::CoverFront)
+                .or_else(|| tag.pictures().next());
+            let art = pic.and_then(|p| {
+                image::load_from_memory(&p.data).ok().map(|img| {
+                    let rgba = img.into_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    // Compute average color from every 8th pixel, then darken
+                    let pixels = rgba.as_raw();
+                    let (mut r, mut g, mut b, mut count) = (0u64, 0u64, 0u64, 0u64);
+                    for chunk in pixels.chunks(4 * 8) {
+                        if chunk.len() >= 4 {
+                            r += chunk[0] as u64;
+                            g += chunk[1] as u64;
+                            b += chunk[2] as u64;
+                            count += 1;
+                        }
+                    }
+                    if count > 0 {
+                        const DARKEN: f32 = 0.4;
+                        *get_bg_color_static().lock().unwrap() = (
+                            (r as f32 / count as f32 / 255.0) * DARKEN,
+                            (g as f32 / count as f32 / 255.0) * DARKEN,
+                            (b as f32 / count as f32 / 255.0) * DARKEN,
+                        );
+                    }
+                    (w, h, rgba.into_raw())
+                })
+            });
+            *art_lock.lock().unwrap() = art;
+        } else {
+            // Fallback for non-ID3 formats: use filename as title
+            let title = std::path::Path::new(path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            *info_lock.lock().unwrap() = Some((title, String::new(), String::new()));
+            *art_lock.lock().unwrap()  = None;
+            *get_bg_color_static().lock().unwrap() = (0.18, 0.18, 0.22); // neutral gray
+        }
     }
     if let Some(state) = get_state().lock().unwrap().as_ref() {
         state.player.stop();
@@ -285,7 +403,22 @@ pub fn toggle_playback() {
     }
 }
 
+pub fn get_pos() -> Duration {
+    get_state().lock().unwrap().as_ref()
+        .map(|s| s.player.get_pos())
+        .unwrap_or(Duration::ZERO)
+}
+
 pub fn rewind_playback() {
+    // If more than 3 s in, restart the current song; otherwise go to previous.
+    if get_pos() > Duration::from_secs(3) {
+        restart_current();
+    } else {
+        prev_in_queue();
+    }
+}
+
+fn restart_current() {
     let was_playing = if let Some(state) = get_state().lock().unwrap().as_ref() {
         !state.player.is_paused()
     } else { false };
