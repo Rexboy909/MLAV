@@ -28,14 +28,14 @@
 #### 3: run "cargo run" in the terminal. Rust, using Cargo, should handle compilation and running.
 
 ##### GUI mockup
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/mockups-02.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/mockups-02.png?raw=true)
+[Source](docs/)
 
 ##### Running app as of 2/23/26
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/Running_app_2-23-26.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/Running_app_2-23-26.png?raw=true)
+[Source](docs/)
 ###### very barebones
 
 ##### Rough UML Diagram
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/UML.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/UML.png?raw=true)
+[Source](docs/)
