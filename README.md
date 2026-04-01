@@ -37,5 +37,5 @@
 ###### very barebones
 
 ##### Rough UML Diagram
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/UML.png?raw=true)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/UML_DIAG.png?raw=true)
 [Source](docs/)
