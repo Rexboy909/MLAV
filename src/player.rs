@@ -2,6 +2,7 @@
 use std::io::BufReader;
 use std::num::NonZero;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::time::Duration;
 use std::thread;
@@ -30,6 +31,8 @@ static CURRENT_BG_COLOR: OnceLock<Mutex<(f32, f32, f32)>> = OnceLock::new();
 // playback queue (sibling songs in the same folder)
 static SONG_QUEUE: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static QUEUE_INDEX: OnceLock<Mutex<usize>> = OnceLock::new();
+// set to true by SampleCapture when the stream reaches natural end-of-file
+static SONG_ENDED: AtomicBool = AtomicBool::new(false);
 
 fn get_queue() -> &'static Mutex<Vec<String>> {
     SONG_QUEUE.get_or_init(|| Mutex::new(Vec::new()))
@@ -107,7 +110,13 @@ struct SampleCapture<S: Source<Item = f32> + Iterator<Item = f32>> {
 impl<S: Source<Item = f32> + Iterator<Item = f32>> Iterator for SampleCapture<S> {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
-        let s = self.inner.next()?;
+        let s = match self.inner.next() {
+            Some(v) => v,
+            None => {
+                SONG_ENDED.store(true, Ordering::Relaxed);
+                return None;
+            }
+        };
         self.channel_acc.push(s);
         // Once we have a full interleaved frame, downmix to mono and store
         if self.channel_acc.len() >= self.channels as usize {
@@ -250,6 +259,15 @@ fn get_state() -> &'static Mutex<Option<AudioState>> {
 pub fn init() {
     reinit_audio();
     watch_device_changes();
+    // Auto-advance to next song when the current one finishes naturally
+    thread::spawn(|| {
+        loop {
+            thread::sleep(Duration::from_millis(250));
+            if SONG_ENDED.swap(false, Ordering::Relaxed) {
+                next_in_queue();
+            }
+        }
+    });
 }
 
 fn reinit_audio() {
@@ -295,6 +313,9 @@ fn default_device_name() -> Option<String> {
 }
 
 pub fn load_song(path: &str) {
+    // Clear any pending end-of-song signal so the watcher thread doesn't
+    // auto-advance immediately after we've manually loaded a new track.
+    SONG_ENDED.store(false, Ordering::Relaxed);
     eprintln!("load_song called with path: {}", path);
     let file = match File::open(path) {
         Ok(f) => f,
