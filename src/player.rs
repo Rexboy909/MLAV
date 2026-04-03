@@ -503,6 +503,12 @@ pub fn fast_forward_playback() {
     }
 }
 
+pub fn get_position_ms() -> u64 {
+    if let Some(state) = get_state().lock().unwrap().as_ref() {
+        state.player.get_pos().as_millis() as u64
+    } else {
+        0
+    }
 /// Returns the most recent `num_samples` raw mono waveform samples (−1..1).
 /// Used by the sinewave visualizer.
 pub fn get_samples(num_samples: usize) -> Vec<f32> {

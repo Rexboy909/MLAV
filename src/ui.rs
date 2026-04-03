@@ -5,14 +5,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::collections::{HashSet, VecDeque};
 use crate::library::{self, LibraryNode};
+use crate::lyrics::{self, Lyrics};
 use crate::player;
 use rfd::FileDialog;
 
 static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
+static LYRICS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SELECTED_SONG: OnceCell<Mutex<Option<String>>> = OnceCell::new();
 static VISUALIZER_TYPE: OnceCell<Mutex<char>> = OnceCell::new();
+static CURRENT_LYRICS: OnceCell<Mutex<Option<Lyrics>>> = OnceCell::new();
 
 //--other statics--//
 static LOGO_TEXTURE: OnceCell<Texture2D> = OnceCell::new();
@@ -85,6 +88,8 @@ fn draw_visualizer(w: f32, h: f32) {
     } else {
         draw_visualizer_2d(vis_x, vis_y, vis_w, vis_h);
     }
+
+    draw_lyrics(vis_x, vis_y, vis_w, vis_h);
 
     draw_rectangle_lines(
         vis_x as f32,
@@ -412,6 +417,15 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
             player::set_queue(siblings, idx);
             *SELECTED_SONG.get_or_init(|| Mutex::new(None)).lock().unwrap() =
                 Some(song.path.clone());
+            // Clear stale lyrics immediately; fetch on a background thread so
+            // the render loop never blocks on a network request.
+            *CURRENT_LYRICS.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+            let path_clone = song.path.clone();
+            std::thread::spawn(move || {
+                let result = lyrics::load_for_song(&path_clone);
+                eprintln!("lyrics fetch done: {}", if result.is_some() { "found" } else { "not found" });
+                *CURRENT_LYRICS.get_or_init(|| Mutex::new(None)).lock().unwrap() = result;
+            });
         }
     }
 
@@ -446,6 +460,116 @@ fn draw_node(node: &LibraryNode, depth: u32, x: f32, max_y: f32, min_y: f32, y: 
             draw_node(child, depth + 1, x, max_y, min_y, y, i == len - 1, &new_depths, &child_path);
         }
     }
+}
+
+fn draw_lyrics(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
+    if !LYRICS_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let guard = CURRENT_LYRICS
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap();
+    let song_lyrics = match guard.as_ref() {
+        Some(l) => l,
+        None => return,
+    };
+
+    if song_lyrics.lines.is_empty() { return; }
+
+    let cx = vis_x as f32 + vis_w as f32 / 2.0;
+    let max_text_w = vis_w as f32 - 32.0;
+    let font_size: u16 = 22;
+
+    // Y position near the top of the visualizer box
+    let line_y = vis_y as f32 + 68.0;
+
+    if song_lyrics.synced {
+        const DEFAULT_WORD_MS: u64 = 500;
+        const FADE_MS: u64 = 300; // fade duration in ms for line mode
+
+        let pos_ms   = player::get_position_ms();
+        let cur_line = lyrics::get_current_index(&song_lyrics.lines, pos_ms);
+        let line     = &song_lyrics.lines[cur_line];
+
+        // End of current line = start of next, or estimated
+        let line_end_ms = if cur_line + 1 < song_lyrics.lines.len() {
+            song_lyrics.lines[cur_line + 1].time_ms
+        } else {
+            let wcount = line.words.len().max(line.text.split_whitespace().count()).max(1);
+            line.time_ms + wcount as u64 * DEFAULT_WORD_MS
+        };
+
+        if !line.words.is_empty() {
+            // Enhanced LRC: word-by-word with exact timestamps
+            const FADE_FRAC: f32 = 0.20;
+            let widx    = line.words.partition_point(|(t, _)| *t <= pos_ms).saturating_sub(1);
+            let (ws, wt) = &line.words[widx];
+            let we       = if widx + 1 < line.words.len() { line.words[widx + 1].0 } else { line_end_ms };
+            let win      = ((we.saturating_sub(*ws)) as f32 * FADE_FRAC).max(1.0) as u64;
+            let fade_in  = (pos_ms.saturating_sub(*ws) as f32 / win as f32).min(1.0);
+            let fade_out = (we.saturating_sub(pos_ms)  as f32 / win as f32).min(1.0);
+            let alpha    = fade_in.min(fade_out);
+            if alpha <= 0.01 { return; }
+
+            let dims  = measure_text(wt.as_str(), FONT.get(), font_size, 1.0);
+            let pad_x = 16.0; let pad_y = 8.0;
+            draw_rectangle(
+                cx - dims.width / 2.0 - pad_x, line_y - font_size as f32 - pad_y,
+                dims.width + pad_x * 2.0, font_size as f32 + pad_y * 2.0 + 4.0,
+                Color::new(0.0, 0.0, 0.0, 0.55 * alpha),
+            );
+            draw_lyric_line(wt, cx, line_y, font_size, alpha, max_text_w);
+        } else {
+            // Standard LRC: show full line, fade in at line start, fade out before next
+            if line.text.trim().is_empty() { return; }
+            let elapsed   = pos_ms.saturating_sub(line.time_ms);
+            let remaining = line_end_ms.saturating_sub(pos_ms);
+            let fade_in   = (elapsed   as f32 / FADE_MS as f32).clamp(0.0, 1.0);
+            let fade_out  = (remaining as f32 / FADE_MS as f32).clamp(0.0, 1.0);
+            let alpha     = fade_in.min(fade_out);
+            if alpha <= 0.01 { return; }
+
+            let text  = truncate_to_fit(&line.text, max_text_w, font_size);
+            let dims  = measure_text(&text, FONT.get(), font_size, 1.0);
+            let pad_x = 16.0; let pad_y = 8.0;
+            draw_rectangle(
+                cx - dims.width / 2.0 - pad_x, line_y - font_size as f32 - pad_y,
+                dims.width + pad_x * 2.0, font_size as f32 + pad_y * 2.0 + 4.0,
+                Color::new(0.0, 0.0, 0.0, 0.55 * alpha),
+            );
+            draw_lyric_line(&text, cx, line_y, font_size, alpha, max_text_w);
+        }
+    } else {
+        // Unsynced: static block at the top of the visualizer
+        let row_h = 22.0_f32;
+        let start_y = line_y;
+        let max_lines = ((vis_h as f32 - 60.0) / row_h).floor() as usize;
+        let count = song_lyrics.lines.len().min(max_lines);
+
+        draw_rectangle(
+            vis_x as f32 + 8.0, vis_y as f32 + 6.0,
+            vis_w as f32 - 16.0, count as f32 * row_h + 16.0,
+            Color::new(0.0, 0.0, 0.0, 0.50),
+        );
+        for (i, line) in song_lyrics.lines.iter().take(count).enumerate() {
+            let y = start_y + i as f32 * row_h;
+            draw_lyric_line(&line.text, cx, y, font_size, 0.85, max_text_w);
+        }
+    }
+}
+
+fn draw_lyric_line(text: &str, cx: f32, y: f32, font_size: u16, alpha: f32, max_w: f32) {
+    let font = FONT.get();
+    let truncated = truncate_to_fit(text, max_w, font_size);
+    let dims = measure_text(&truncated, font, font_size, 1.0);
+    let x = cx - dims.width / 2.0;
+    draw_text_ex(&truncated, x, y, TextParams {
+        font,
+        font_size,
+        color: Color::new(1.0, 1.0, 1.0, alpha),
+        ..Default::default()
+    });
 }
 
 fn get_collapsed() -> std::sync::MutexGuard<'static, HashSet<String>> {
@@ -517,6 +641,9 @@ fn draw_visualizer_type_buttons() {
         *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '3';
     }
 
+    // LYR toggle button
+    let lyr_on = LYRICS_ENABLED.load(Ordering::Relaxed);
+    let (bg_lyr, text_lyr) = if lyr_on {
     // Wave button
     let is_wave_selected = current == 'w';
     let (bg_w, text_w) = if is_wave_selected {
@@ -525,6 +652,10 @@ fn draw_visualizer_type_buttons() {
         (SIDEBAR_BG_COLOR, WHITE)
     };
     if draw_button_rect(
+        410.0, 30.0, 65.0, 35.0,
+        "LYR", LIGHTGRAY, bg_lyr, BLACK, text_lyr, WHITE,
+    ) {
+        LYRICS_ENABLED.store(!lyr_on, Ordering::Relaxed);
         405.0, 30.0, 80.0, 35.0,
         "Wave", LIGHTGRAY, bg_w, BLACK, text_w, WHITE,
     ) {
