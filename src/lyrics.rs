@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
-use id3::{Tag, TagLike};
+use lofty::probe::Probe;
+use lofty::prelude::*;
 
 pub struct LyricLine {
     pub time_ms: u64,
@@ -29,19 +30,22 @@ pub fn load_for_song(audio_path: &str) -> Option<Lyrics> {
         }
     }
 
-    // Read ID3 tags once; used for both lrclib and USLT fallback
-    let tag = Tag::read_from_path(audio_path).ok();
+    // Read tags once via lofty; used for both lrclib lookup and embedded lyrics fallback
+    let tag_data: Option<(Option<String>, String, Option<u32>)> = Probe::open(audio_path)
+        .ok()
+        .and_then(|p| p.read().ok())
+        .and_then(|tf| {
+            let tag = tf.primary_tag().or_else(|| tf.first_tag())?;
+            let title  = tag.title().map(|s| s.to_string());
+            let artist = tag.artist().map(|s| s.to_string()).unwrap_or_default();
+            Some((title, artist, None))
+        });
 
     // 2. Try lrclib.net
     {
-        // Prefer ID3 tags. When absent, try to parse the filename stem.
-        // Handles common patterns:
-        //   "Sleep Token - Gods"  → title="Gods",        artist="Sleep Token"
-        //   "Gods Sleep Token"    → title="Gods Sleep Token", artist="" (freetext fallback)
-        let (title, artist) = if let Some(ref t) = tag {
-            let ti = t.title().filter(|s| !s.is_empty()).map(|s| s.to_string());
-            let ar = t.artist().unwrap_or("").to_string();
-            (ti, ar)
+        // Prefer tags. When absent, try to parse the filename stem.
+        let (title, artist) = if let Some((ref ti, ref ar, _)) = tag_data {
+            (ti.clone(), ar.clone())
         } else {
             (None, String::new())
         };
@@ -59,8 +63,6 @@ pub fn load_for_song(audio_path: &str) -> Option<Lyrics> {
             if let Some(dash) = stem.find(" - ") {
                 let left  = stem[..dash].trim().to_string();
                 let right = stem[dash + 3..].trim().to_string();
-                // Heuristic: lrclib will sort by relevance; try both orderings
-                // by passing the shorter part as title (usually the song title)
                 if left.len() <= right.len() {
                     (Some(left), right)
                 } else {
@@ -71,7 +73,7 @@ pub fn load_for_song(audio_path: &str) -> Option<Lyrics> {
             }
         };
 
-        let dur = tag.as_ref().and_then(|t| t.duration());
+        let dur = tag_data.as_ref().and_then(|(_, _, d)| *d);
 
         if let Some(title) = title {
             if let Some(lyrics) = fetch_from_lrclib(&title, &artist, dur) {
@@ -80,21 +82,20 @@ pub fn load_for_song(audio_path: &str) -> Option<Lyrics> {
         }
     }
 
-    // 3. Try ID3 USLT tag (unsynced lyrics)
-    if let Some(t) = tag {
-        let mut lyric_lines: Vec<LyricLine> = Vec::new();
-        for lyr in t.lyrics() {
-            for line_text in lyr.text.lines() {
-                if !line_text.trim().is_empty() {
-                    lyric_lines.push(LyricLine {
-                        time_ms: 0,
-                        text: line_text.to_string(),
-                        words: Vec::new(),
-                    });
+    // 3. Try embedded unsynced lyrics via lofty
+    if let Ok(tagged_file) = Probe::open(audio_path).and_then(|p| p.read()) {
+        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+            // lofty exposes lyrics as a tag item with key "LYRICS" / "USLT" etc.
+            // Use the generic accessor: tag.get_string(&ItemKey::Lyrics)
+            use lofty::tag::ItemKey;
+            if let Some(text) = tag.get_string(&ItemKey::Lyrics) {
+                let lyric_lines: Vec<LyricLine> = text.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| LyricLine { time_ms: 0, text: l.to_string(), words: Vec::new() })
+                    .collect();
+                if !lyric_lines.is_empty() {
+                    return Some(Lyrics { lines: lyric_lines, synced: false });
                 }
-            }
-            if !lyric_lines.is_empty() {
-                return Some(Lyrics { lines: lyric_lines, synced: false });
             }
         }
     }

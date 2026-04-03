@@ -509,6 +509,8 @@ pub fn get_position_ms() -> u64 {
     } else {
         0
     }
+}
+
 /// Returns the most recent `num_samples` raw mono waveform samples (−1..1).
 /// Used by the sinewave visualizer.
 pub fn get_samples(num_samples: usize) -> Vec<f32> {

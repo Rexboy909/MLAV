@@ -14,7 +14,8 @@ static COLLAPSED_FOLDERS: OnceCell<Mutex<HashSet<String>>> = OnceCell::new();
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
 static LYRICS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SELECTED_SONG: OnceCell<Mutex<Option<String>>> = OnceCell::new();
-static VISUALIZER_TYPE: OnceCell<Mutex<char>> = OnceCell::new();
+static VISUALIZER_TYPE: OnceCell<Mutex<char>> = OnceCell::new(); // '2' = 2D, '3' = 3D
+static VISUALIZER_MODE: OnceCell<Mutex<char>> = OnceCell::new(); // 'b' = bars, 'w' = wave
 static CURRENT_LYRICS: OnceCell<Mutex<Option<Lyrics>>> = OnceCell::new();
 
 //--other statics--//
@@ -26,6 +27,8 @@ static WAVE_SCROLL_OFFSET: OnceCell<Mutex<f32>> = OnceCell::new();
 thread_local! {
     // (cached_song_path, texture)
     static ALBUM_ART_TEX: RefCell<Option<(String, Texture2D)>> = RefCell::new(None);
+    // Per-frame EMA-smoothed waveform for the 2D wave visualizer
+    static WAVE_SMOOTH: RefCell<Vec<f32>> = RefCell::new(Vec::new());
 }
 
 //--colors--//
@@ -81,12 +84,13 @@ fn draw_visualizer(w: f32, h: f32) {
     if vis_w <= 0 || vis_h <= 0 { return; }
 
     let vis_type = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
-    if vis_type == '3' {
-        draw_visualizer_3d(vis_x, vis_y, vis_w, vis_h);
-    } else if vis_type == 'w' {
-        draw_visualizer_sinewave_3d(vis_x, vis_y, vis_w, vis_h);
-    } else {
-        draw_visualizer_2d(vis_x, vis_y, vis_w, vis_h);
+    let vis_mode = *VISUALIZER_MODE.get_or_init(|| Mutex::new('b')).lock().unwrap();
+
+    match (vis_mode, vis_type) {
+        ('w', '3') => draw_visualizer_sinewave_3d(vis_x, vis_y, vis_w, vis_h),
+        ('w', _)   => draw_visualizer_sinewave_2d(vis_x, vis_y, vis_w, vis_h),
+        (_, '3')   => draw_visualizer_3d(vis_x, vis_y, vis_w, vis_h),
+        _          => draw_visualizer_2d(vis_x, vis_y, vis_w, vis_h),
     }
 
     draw_lyrics(vis_x, vis_y, vis_w, vis_h);
@@ -113,6 +117,63 @@ fn draw_visualizer_2d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
         let bar_color = Color::new(t, 0.2, 1.0 - t, 0.9);
         draw_rectangle(bx + 1.0, by, bar_w - 2.0, bar_h, bar_color);
     }
+}
+
+fn draw_visualizer_sinewave_2d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
+    const NUM_POINTS: usize = 512;
+    // EMA smoothing factor: lower = smoother but slower to react (0.0–1.0)
+    const SMOOTH: f32 = 0.18;
+
+    let raw = player::get_samples(NUM_POINTS);
+
+    // Update the per-frame EMA smoothing buffer on the render thread
+    let smoothed: Vec<f32> = WAVE_SMOOTH.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        if buf.len() != NUM_POINTS {
+            // First call — seed the buffer with the raw samples
+            *buf = raw.clone();
+        } else {
+            for (s, &r) in buf.iter_mut().zip(raw.iter()) {
+                *s = *s * (1.0 - SMOOTH) + r * SMOOTH;
+            }
+        }
+        buf.clone()
+    });
+
+    let cx = vis_x as f32;
+    let cy = vis_y as f32 + vis_h as f32 / 2.0; // vertical centre
+    let amp = vis_h as f32 * 0.42;               // max deflection
+    let x_step = vis_w as f32 / (NUM_POINTS - 1) as f32;
+
+    for i in 1..NUM_POINTS {
+        let t0 = (i - 1) as f32 / (NUM_POINTS - 1) as f32;
+
+        let x0 = cx + (i - 1) as f32 * x_step;
+        let x1 = cx + i as f32 * x_step;
+        let y0 = cy - smoothed[i - 1] * amp;
+        let y1 = cy - smoothed[i]     * amp;
+
+        // Colour shifts left→right: blue-purple → cyan-purple
+        let r = 0.3 + t0 * 0.4;
+        let g = 0.1 + t0 * 0.6;
+        let b = 1.0_f32;
+        let brightness = 0.55 + smoothed[i - 1].abs() * 1.4;
+        let color = Color::new(
+            (r * brightness).min(1.0),
+            (g * brightness).min(1.0),
+            (b * brightness).min(1.0),
+            0.9,
+        );
+        draw_line(x0, y0, x1, y1, 2.0, color);
+    }
+
+    // Faint centre-line
+    draw_line(
+        cx, cy,
+        cx + vis_w as f32, cy,
+        1.0,
+        Color::new(1.0, 1.0, 1.0, 0.08),
+    );
 }
 
 fn draw_visualizer_3d(vis_x: i32, vis_y: i32, vis_w: i32, vis_h: i32) {
@@ -611,55 +672,36 @@ fn draw_button_rect(x: f32, y: f32, w: f32, h: f32, label: &str, ch: Color, c: C
 }
 
 fn draw_visualizer_type_buttons() {
-    let current = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
+    let current_type = *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap();
+    let current_mode = *VISUALIZER_MODE.get_or_init(|| Mutex::new('b')).lock().unwrap();
 
-    // 2D button
-    let is_2d_selected = current == '2';
-    let (bg_2d, text_2d) = if is_2d_selected {
-        (LIGHTGRAY, BLACK)
-    } else {
-        (SIDEBAR_BG_COLOR, WHITE)
-    };
-    if draw_button_rect(
-        300.0, 30.0, 50.0, 35.0,
-        "2D", LIGHTGRAY, bg_2d, BLACK, text_2d, WHITE,
-    ) {
+    // ── What: Bars | Wave ──────────────────────────────────────────
+    let (bg_bars, text_bars) = if current_mode == 'b' { (LIGHTGRAY, BLACK) } else { (SIDEBAR_BG_COLOR, WHITE) };
+    if draw_button_rect(300.0, 30.0, 70.0, 35.0, "Bars", LIGHTGRAY, bg_bars, BLACK, text_bars, WHITE) {
+        *VISUALIZER_MODE.get_or_init(|| Mutex::new('b')).lock().unwrap() = 'b';
+    }
+
+    let (bg_wave, text_wave) = if current_mode == 'w' { (LIGHTGRAY, BLACK) } else { (SIDEBAR_BG_COLOR, WHITE) };
+    if draw_button_rect(375.0, 30.0, 70.0, 35.0, "Wave", LIGHTGRAY, bg_wave, BLACK, text_wave, WHITE) {
+        *VISUALIZER_MODE.get_or_init(|| Mutex::new('b')).lock().unwrap() = 'w';
+    }
+
+    // ── Type: 2D | 3D ─────────────────────────────────────────────
+    let (bg_2d, text_2d) = if current_type == '2' { (LIGHTGRAY, BLACK) } else { (SIDEBAR_BG_COLOR, WHITE) };
+    if draw_button_rect(460.0, 30.0, 50.0, 35.0, "2D", LIGHTGRAY, bg_2d, BLACK, text_2d, WHITE) {
         *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '2';
     }
 
-    // 3D button
-    let is_3d_selected = current == '3';
-    let (bg_3d, text_3d) = if is_3d_selected {
-        (LIGHTGRAY, BLACK)
-    } else {
-        (SIDEBAR_BG_COLOR, WHITE)
-    };
-    if draw_button_rect(
-        350.0, 30.0, 50.0, 35.0,
-        "3D", LIGHTGRAY, bg_3d, BLACK, text_3d, WHITE,
-    ) {
+    let (bg_3d, text_3d) = if current_type == '3' { (LIGHTGRAY, BLACK) } else { (SIDEBAR_BG_COLOR, WHITE) };
+    if draw_button_rect(515.0, 30.0, 50.0, 35.0, "3D", LIGHTGRAY, bg_3d, BLACK, text_3d, WHITE) {
         *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = '3';
     }
 
-    // LYR toggle button
+    // ── LYR toggle ────────────────────────────────────────────────
     let lyr_on = LYRICS_ENABLED.load(Ordering::Relaxed);
-    let (bg_lyr, text_lyr) = if lyr_on {
-    // Wave button
-    let is_wave_selected = current == 'w';
-    let (bg_w, text_w) = if is_wave_selected {
-        (LIGHTGRAY, BLACK)
-    } else {
-        (SIDEBAR_BG_COLOR, WHITE)
-    };
-    if draw_button_rect(
-        410.0, 30.0, 65.0, 35.0,
-        "LYR", LIGHTGRAY, bg_lyr, BLACK, text_lyr, WHITE,
-    ) {
+    let (bg_lyr, text_lyr) = if lyr_on { (LIGHTGRAY, BLACK) } else { (SIDEBAR_BG_COLOR, WHITE) };
+    if draw_button_rect(580.0, 30.0, 65.0, 35.0, "LYR", LIGHTGRAY, bg_lyr, BLACK, text_lyr, WHITE) {
         LYRICS_ENABLED.store(!lyr_on, Ordering::Relaxed);
-        405.0, 30.0, 80.0, 35.0,
-        "Wave", LIGHTGRAY, bg_w, BLACK, text_w, WHITE,
-    ) {
-        *VISUALIZER_TYPE.get_or_init(|| Mutex::new('2')).lock().unwrap() = 'w';
     }
 }
 
