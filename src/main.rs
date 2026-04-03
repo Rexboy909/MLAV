@@ -9,7 +9,7 @@ use macroquad::prelude::*;
 #[macroquad::main(window_conf)]
 async fn main() {
     library::init("Library/");
-    library::watch("Library/");
+    library::watch();
     player::init();
     ui::load_assets().await;
 

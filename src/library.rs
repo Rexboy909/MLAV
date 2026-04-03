@@ -15,21 +15,34 @@ pub enum LibraryNode {
 
 // -- global state --//
 static LIBRARY: OnceLock<Mutex<Option<LibraryNode>>> = OnceLock::new();
+static LIBRARY_ROOT: OnceLock<Mutex<String>> = OnceLock::new();
 
 fn get_library() -> &'static Mutex<Option<LibraryNode>> {
     LIBRARY.get_or_init(|| Mutex::new(None))
 }
 
+fn get_root() -> &'static Mutex<String> {
+    LIBRARY_ROOT.get_or_init(|| Mutex::new(String::new()))
+}
+
 pub fn init(dir: &str) {
+    *get_root().lock().unwrap() = dir.to_string();
     *get_library().lock().unwrap() = Some(build_tree(dir));
 }
 
-pub fn watch(dir: &str) {
-    let dir = dir.to_string();
-    thread::spawn(move || {
+/// Change the library root at runtime (picked from the file dialog).
+pub fn set_root(dir: &str) {
+    init(dir);
+}
+
+pub fn watch() {
+    thread::spawn(|| {
         loop {
             thread::sleep(Duration::from_secs(5));
-            *get_library().lock().unwrap() = Some(build_tree(&dir));
+            let dir = get_root().lock().unwrap().clone();
+            if !dir.is_empty() {
+                *get_library().lock().unwrap() = Some(build_tree(&dir));
+            }
         }
     });
 }
@@ -47,7 +60,7 @@ fn build_tree(dir: &str) -> LibraryNode {
 fn is_audio_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("mp3") | Some("wav") | Some("flac") | Some("ogg")
+        Some("mp3") | Some("wav") | Some("flac") | Some("ogg") | Some("aac") | Some("m4a")
     )
 }
 

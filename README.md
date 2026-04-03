@@ -18,9 +18,12 @@
 2. Song Selection and Navigation
 3. Several sound formats supported
 4. A simple 2d visualizer
-5. a 3d Visualiser is being worked on, not yet completed
+5. Two different 3D visualizers
 
-## Compile instructions (Executables will be provided at a later date):
+## Release:
+#### there is now github compiled executables, if you prefer. Compilation is reccomended but it *should* work
+
+## Compile instructions
 #### 1: Make sure you have [Rust](https://rust-lang.org/tools/install/) installed.
 - Go to the site
 - run Install script (if on unix os or MacOS) or run installer (if on windows)
@@ -28,14 +31,14 @@
 #### 3: run "cargo run" in the terminal. Rust, using Cargo, should handle compilation and running.
 
 ##### GUI mockup
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/mockups-02.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/mockups-02.png?raw=true)
+[Source](docs/)
 
 ##### Running app as of 2/23/26
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/Running_app_2-23-26.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/Running_app_2-23-26.png?raw=true)
+[Source](docs/)
 ###### very barebones
 
 ##### Rough UML Diagram
-![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/assets/Images/assignment_files/UML.png?raw=true)
-[Source](assets/Images/assignment_files)
+![Image of running app](https://github.com/Rexboy909/MLAV/blob/main/docs/UML_DIAG.png?raw=true)
+[Source](docs/)

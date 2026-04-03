@@ -1,4 +1,5 @@
-use id3::{Tag, TagLike};
+use lofty::prelude::*;
+use lofty::probe::Probe;
 use std::path::Path;
 
 pub struct Song {
@@ -29,6 +30,12 @@ impl Song {
             duration: tag.as_ref()
                 .and_then(|t| t.duration())
                 .unwrap_or(0),
+        let tagged_file = Probe::open(path).ok()?.read().ok()?;
+        let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag())?;
+        Some(Song {
+            title: tag.title().as_deref().unwrap_or("Unknown Title").to_string(),
+            artist: tag.artist().as_deref().unwrap_or("Unknown Artist").to_string(),
+            duration: 0,
             path: path.to_string_lossy().to_string(),
         })
     }
